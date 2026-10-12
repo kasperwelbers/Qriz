@@ -1,4 +1,4 @@
-import { and, asc, count, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { WSContext } from "hono/ws";
 import type { User } from "./auth.ts";
 import { config } from "./config.ts";
@@ -24,6 +24,8 @@ class LiveRun {
   phase: Phase = "lobby";
   /** When on, a paper round follows each question: options appear on the projector after phones are locked. */
   paperRound = false;
+  /** Show checked-in students' names in the lobby, so the class can see who is "present". */
+  showNames = true;
   qIndex = -1;
   servedAt = 0;
   deadline = 0;
@@ -87,6 +89,11 @@ class LiveRun {
     this.clearTimer();
     this.phase = "closed";
     this.broadcast();
+  }
+
+  setShowNames(on: boolean) {
+    this.showNames = on;
+    this.broadcast("presenter");
   }
 
   setPaperRound(on: boolean) {
@@ -238,7 +245,14 @@ class LiveRun {
           .all()
       : [];
     const counts = (q?.options ?? []).map((_, i) => answers.filter((a) => a.choice === i && !a.disqualified).length);
-    const checkinCount = db.select({ n: count() }).from(schema.checkins).where(eq(schema.checkins.runId, this.runId)).get()!.n;
+    const checkedIn = db
+      .select({ name: schema.users.name })
+      .from(schema.checkins)
+      .innerJoin(schema.users, eq(schema.users.id, schema.checkins.userId))
+      .where(eq(schema.checkins.runId, this.runId))
+      .orderBy(asc(schema.checkins.scannedAt))
+      .all();
+    const checkinCount = checkedIn.length;
     conn.ws.send(
       JSON.stringify({
         ...base,
@@ -251,6 +265,8 @@ class LiveRun {
         answeredCount: answers.length,
         disqualifiedCount: answers.filter((a) => a.disqualified).length + [...this.focusLost.keys()].filter((u) => !answers.some((a) => a.userId === u)).length,
         checkinCount,
+        showNames: this.showNames,
+        names: this.showNames ? checkedIn.map((c) => c.name ?? "(no name yet)") : [],
         connectedStudents: [...this.conns].filter((c) => c.role === "student").length,
       }),
     );
@@ -280,6 +296,11 @@ export function getLiveRun(runId: string): LiveRun | null {
   const lr = new LiveRun(runId, task, questions, run.endedAt !== null);
   live.set(runId, lr);
   return lr;
+}
+
+/** A student changed their name: update the lobby of any live run they're in. */
+export function refreshPresentersFor(userId: string) {
+  for (const lr of live.values()) if (lr.phase !== "ended" && isCheckedIn(lr.runId, userId)) lr.onCheckin();
 }
 
 export function isCheckedIn(runId: string, userId: string): boolean {

@@ -15,6 +15,13 @@
       "when": 1791838882859,
       "tag": "0001_answer_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791842522258,
+      "tag": "0002_user_name",
+      "breakpoints": true
     }
   ]
 }

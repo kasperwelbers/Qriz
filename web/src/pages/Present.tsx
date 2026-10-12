@@ -1,4 +1,4 @@
-import { ChevronRight, FileText, Maximize, QrCode, ShieldAlert, Square, Users } from "lucide-react";
+import { ChevronRight, Eye, EyeOff, FileText, Maximize, QrCode, ShieldAlert, Square, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Navigate, useParams } from "react-router";
 import QRCode from "react-qr-code";
@@ -47,8 +47,9 @@ export default function Present() {
   if (me === null) return <Navigate to="/login" replace />;
   if (!state) return <div className="flex min-h-dvh items-center justify-center text-muted-foreground">{connected ? "Loading…" : "Connecting…"}</div>;
 
-  const action = (a: "next" | "close" | "end" | "paper-on" | "paper-off") => api(`/teacher/runs/${runId}/${a}`, { method: "POST" }).catch((e) => alert(e.message));
-  const qrVisible = state.phase === "lobby" || state.kind === "attendance" || showQr;
+  const action = (a: "next" | "close" | "end" | "paper-on" | "paper-off" | "names-on" | "names-off") => api(`/teacher/runs/${runId}/${a}`, { method: "POST" }).catch((e) => alert(e.message));
+  const lobby = state.phase === "lobby" || state.kind === "attendance";
+  const qrVisible = lobby || showQr;
   const isLast = state.qIndex >= state.total - 1;
 
   return (
@@ -151,10 +152,36 @@ export default function Present() {
                 </p>
               </div>
             )}
+            {lobby && (
+              <div className="grid max-w-xl flex-1 content-start gap-6">
+                <div className="flex items-end gap-4">
+                  <span className="text-8xl font-bold tabular-nums">{state.checkinCount}</span>
+                  <span className="pb-3 text-2xl text-white/70">checked in</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="mb-3 ml-auto text-white/60 hover:bg-white/10 hover:text-white"
+                    onClick={() => action(state.showNames ? "names-off" : "names-on")}
+                  >
+                    {state.showNames ? <EyeOff /> : <Eye />} {state.showNames ? "Hide names" : "Show names"}
+                  </Button>
+                </div>
+                {state.showNames && (
+                  <div className="flex max-h-[45vh] flex-wrap content-start gap-2 overflow-hidden">
+                    {state.names?.map((n, i) => (
+                      <span key={i} className="animate-in fade-in zoom-in-95 rounded-full bg-white/10 px-3 py-1 text-lg">
+                        {n}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <p className="text-white/50">Only check in for yourself. Your name appears on this screen, and attendance is checked against who is in the room.</p>
+              </div>
+            )}
             {qrVisible && (
               <div className="grid justify-items-center gap-4 text-center">
-                <RotatingQr runId={runId} size={state.phase === "lobby" || state.kind === "attendance" ? 420 : 200} />
-                {(state.phase === "lobby" || state.kind === "attendance") && (
+                <RotatingQr runId={runId} size={lobby ? 420 : 200} />
+                {lobby && (
                   <p className="text-2xl">{state.kind === "quiz" ? "Scan to join the quiz" : "Scan to check in"}</p>
                 )}
               </div>

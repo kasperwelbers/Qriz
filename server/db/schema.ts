@@ -6,6 +6,8 @@ const now = sql`(unixepoch('subsec') * 1000)`;
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
+  /** Name shown to the class in the lobby; asked once at first login. */
+  name: text("name"),
   role: text("role", { enum: ["teacher", "student"] }).notNull().default("student"),
   createdAt: integer("created_at").notNull().default(now),
 });

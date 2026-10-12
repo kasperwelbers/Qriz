@@ -1,6 +1,7 @@
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { NameGate } from "@/components/NameForm";
 import { Centered } from "@/components/Shell";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
@@ -29,6 +30,11 @@ export default function Join({ resume = false }: { resume?: boolean }) {
     );
   }, [navigate, resume, token]);
 
+  // Check in first (the QR code expires quickly), ask for a name afterwards if it's missing.
+  if (done) return <NameGate>{card()}</NameGate>;
+  return card();
+
+  function card() {
   return (
     <Centered>
       <Card className="w-full max-w-sm text-center">
@@ -51,4 +57,5 @@ export default function Join({ resume = false }: { resume?: boolean }) {
       </Card>
     </Centered>
   );
+  }
 }

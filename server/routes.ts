@@ -125,7 +125,7 @@ export const teacherRoutes = new Hono<AppEnv>()
     return c.json({ url: `${config.publicUrl}/j/${token}`, rotateMs: config.qrRotateMs });
   })
 
-  .post("/runs/:id/:action{next|close|end|paper-on|paper-off}", (c) => {
+  .post("/runs/:id/:action{next|close|end|paper-on|paper-off|names-on|names-off}", (c) => {
     const row = ownedRun(c, c.req.param("id"));
     if (!row) return c.json({ error: "Not found" }, 404);
     const lr = getLiveRun(row.run.id)!;
@@ -133,6 +133,7 @@ export const teacherRoutes = new Hono<AppEnv>()
     if (action === "next" && !lr.next()) return c.json({ error: "No more questions" }, 400);
     if (action === "close") lr.phase === "question" ? lr.endQuestion() : lr.close();
     if (action === "paper-on" || action === "paper-off") lr.setPaperRound(action === "paper-on");
+    if (action === "names-on" || action === "names-off") lr.setShowNames(action === "names-on");
     if (action === "end") lr.end();
     return c.json({ ok: true });
   })

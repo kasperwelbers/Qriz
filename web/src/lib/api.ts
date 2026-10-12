@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export type Me = { id: string; email: string; role: "teacher" | "student" } | null;
+export type Me = { id: string; email: string; role: "teacher" | "student"; name: string | null } | null;
 
 export class ApiError extends Error {
   constructor(

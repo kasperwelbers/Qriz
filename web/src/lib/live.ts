@@ -26,6 +26,8 @@ export type LiveState = {
   checkinCount?: number;
   connectedStudents?: number;
   paperRound?: boolean;
+  showNames?: boolean;
+  names?: string[];
 };
 
 /** Live run connection with automatic reconnect. `offset` maps server time to local time. */

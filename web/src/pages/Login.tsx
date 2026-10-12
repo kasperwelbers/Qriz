@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
+import { NameForm } from "@/components/NameForm";
+import { api, type Me } from "@/lib/api";
 
 export default function Login() {
   const [params] = useSearchParams();
@@ -17,6 +18,7 @@ export default function Login() {
   const [code, setCode] = useState("");
   const [error, setError] = useState(params.get("expired") ? "That login link has expired. Request a new code." : "");
   const [busy, setBusy] = useState(false);
+  const [askName, setAskName] = useState(false);
 
   async function start(e: FormEvent) {
     e.preventDefault();
@@ -37,13 +39,16 @@ export default function Login() {
     setBusy(true);
     setError("");
     try {
-      await api("/auth/verify", { body: { loginId, code } });
-      navigate(next, { replace: true });
+      const r = await api<{ user: Me }>("/auth/verify", { body: { loginId, code } });
+      if (r.user && !r.user.name) setAskName(true);
+      else navigate(next, { replace: true });
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
     }
   }
+
+  if (askName) return <NameForm onDone={() => navigate(next, { replace: true })} />;
 
   return (
     <Centered>

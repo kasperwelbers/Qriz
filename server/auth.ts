@@ -6,6 +6,7 @@ import type { Context } from "hono";
 import { config } from "./config.ts";
 import { randomCode, randomId, randomToken, safeEqual, sha256 } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
+import { refreshPresentersFor } from "./live.ts";
 import { sendLoginEmail } from "./mail.ts";
 
 export type User = typeof schema.users.$inferSelect;
@@ -108,7 +109,7 @@ function startSession(c: Context, user: User) {
 export const authRoutes = new Hono<AppEnv>()
   .get("/me", (c) => {
     const user = c.get("user");
-    return c.json({ user: user && { id: user.id, email: user.email, role: user.role } });
+    return c.json({ user: user && { id: user.id, email: user.email, role: user.role, name: user.name } });
   })
 
   .post("/start", async (c) => {
@@ -149,7 +150,7 @@ export const authRoutes = new Hono<AppEnv>()
     db.update(schema.loginRequests).set({ usedAt: Date.now() }).where(eq(schema.loginRequests.id, req.id)).run();
     const user = upsertUser(req.email);
     startSession(c, user);
-    return c.json({ user: { id: user.id, email: user.email, role: user.role } });
+    return c.json({ user: { id: user.id, email: user.email, role: user.role, name: user.name } });
   })
 
   .get("/link/:token", (c) => {
@@ -163,6 +164,15 @@ export const authRoutes = new Hono<AppEnv>()
     startSession(c, upsertUser(req.email));
     const next = c.req.query("next");
     return c.redirect(next?.startsWith("/") && !next.startsWith("//") ? next : "/");
+  })
+
+  .post("/name", requireUser, async (c) => {
+    const { name } = await c.req.json<{ name?: string }>();
+    const clean = String(name ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
+    if (clean.length < 2) return c.json({ error: "Enter your name" }, 400);
+    db.update(schema.users).set({ name: clean }).where(eq(schema.users.id, c.get("user")!.id)).run();
+    refreshPresentersFor(c.get("user")!.id);
+    return c.json({ ok: true });
   })
 
   .post("/logout", (c) => {
