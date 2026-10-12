@@ -16,6 +16,22 @@ export default function Play() {
 
   useEffect(() => setPicked(null), [state?.questionId]);
 
+  // Split screen keeps focus while the other half is read, so check the window size instead.
+  const [split, setSplit] = useState(isSplitScreen);
+  const inQuestion = state?.phase === "question";
+  useEffect(() => {
+    // Already split when the question starts: the buttons stay disabled until it's closed.
+    // Switching to split screen during the question disqualifies, like leaving the page.
+    setSplit(isSplitScreen());
+    const check = () => {
+      const now = isSplitScreen();
+      setSplit(now);
+      if (now && inQuestion) send({ type: "focus", state: "hidden", reason: "split screen" });
+    };
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, [send, inQuestion]);
+
   // Leaving the page during a question disqualifies the answer; the server decides, we only report.
   useEffect(() => {
     const report = () => send({ type: "focus", state: "hidden" });
@@ -63,13 +79,13 @@ export default function Play() {
           <div className="h-full bg-primary transition-[width] duration-200 ease-linear" style={{ width: `${(left / state.timeLimitSec) * 100}%` }} />
         </div>
         {state.disqualified && (
-          <p className="rounded-md bg-red-500/10 p-3 text-sm text-red-600">You left the app during this question, so your answer won't count.</p>
+          <p className="rounded-md bg-red-500/10 p-3 text-sm text-red-600">You left the app or used split screen during this question, so your answer won't count.</p>
         )}
         <div className="flex flex-1 flex-col gap-3">
           {state.choices?.map((c, i) => (
             <button
               key={c.index}
-              disabled={answer !== null || left <= 0}
+              disabled={answer !== null || left <= 0 || split}
               onClick={() => {
                 setPicked(c.index);
                 send({ type: "answer", questionId: state.questionId, choice: c.index });
@@ -93,9 +109,21 @@ export default function Play() {
   return (
     <div className="flex min-h-dvh flex-col p-4 select-none" onContextMenu={(e) => e.preventDefault()}>
       {!connected && <p className="mb-2 text-center text-sm text-amber-600">Reconnecting…</p>}
+      {split && state.kind === "quiz" && state.phase !== "ended" && (
+        <p className="mb-3 rounded-md bg-amber-500/10 p-3 text-center text-sm text-amber-700">Close split screen and use this page full screen to answer.</p>
+      )}
       {body}
     </div>
   );
+}
+
+/**
+ * True when the page fills well under the screen, as with split screen or a floating window.
+ * A full-screen mobile browser uses ~75-90% of the screen area (address and nav bars take the rest).
+ */
+function isSplitScreen() {
+  const ratio = (window.innerWidth * window.innerHeight) / (screen.width * screen.height);
+  return ratio < 0.55;
 }
 
 function Message({ icon, title, text }: { icon?: React.ReactNode; title: string; text: string }) {

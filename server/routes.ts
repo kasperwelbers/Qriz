@@ -223,34 +223,6 @@ function results(run: typeof schema.runs.$inferSelect, task: typeof schema.tasks
     for (const { checkin } of checkins) if (checkin.ip && net(checkin.ip) !== mainNet) suspicion.get(checkin.userId)!.push("different network");
   }
 
-  // Answer sharing: two students repeatedly giving the same answer within seconds, including a shared wrong one.
-  const byUser = new Map<string, Map<string, (typeof answers)[number]>>();
-  const paperUsers = new Set(checkins.filter(({ checkin }) => checkin.deviceId === PAPER).map(({ checkin }) => checkin.userId));
-  for (const a of answers) {
-    if (a.disqualified || paperUsers.has(a.userId)) continue;
-    if (!byUser.has(a.userId)) byUser.set(a.userId, new Map());
-    byUser.get(a.userId)!.set(a.questionId, a);
-  }
-  const emailOf = new Map(checkins.map(({ checkin, email }) => [checkin.userId, email]));
-  const users = [...byUser.keys()];
-  for (let i = 0; i < users.length; i++) {
-    for (let j = i + 1; j < users.length; j++) {
-      let together = 0;
-      let wrongTogether = 0;
-      for (const q of questions) {
-        const a = byUser.get(users[i]!)!.get(q.id);
-        const b = byUser.get(users[j]!)!.get(q.id);
-        if (a && b && a.choice === b.choice && Math.abs(a.answeredAt - b.answeredAt) <= 2000) {
-          together++;
-          if (q.correctIndex !== null && a.choice !== q.correctIndex) wrongTogether++;
-        }
-      }
-      if (together >= 2 && wrongTogether >= 1) {
-        suspicion.get(users[i]!)?.push(`answers in sync with ${emailOf.get(users[j]!)}`);
-        suspicion.get(users[j]!)?.push(`answers in sync with ${emailOf.get(users[i]!)}`);
-      }
-    }
-  }
   for (const a of answers) if (a.flag) suspicion.get(a.userId)?.push(`${a.flag} on Q${questions.findIndex((q) => q.id === a.questionId) + 1}`);
 
   return {

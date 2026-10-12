@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type LiveState = {
   type: "state";
@@ -67,7 +67,9 @@ export function useLive(runId: string, as: "presenter" | "student") {
     };
   }, [runId, as]);
 
-  const send = (msg: unknown) => wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify(msg));
+  const send = useCallback((msg: unknown) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(msg));
+  }, []);
   return { state, error, connected, send, offset };
 }
 

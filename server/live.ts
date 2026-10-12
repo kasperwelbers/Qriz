@@ -116,14 +116,14 @@ class LiveRun {
 
   private handleMessageUnsafe(conn: Conn, raw: string) {
     if (conn.role !== "student") return;
-    let msg: { type?: string; questionId?: string; choice?: number; state?: string };
+    let msg: { type?: string; questionId?: string; choice?: number; state?: string; reason?: string };
     try {
       msg = JSON.parse(raw);
     } catch {
       return;
     }
     if (msg.type === "focus" && msg.state === "hidden" && this.phase === "question") {
-      this.markFocusLost(conn.user.id, "left the page");
+      this.markFocusLost(conn.user.id, msg.reason === "split screen" ? "split screen" : "left the page");
     } else if (msg.type === "answer") {
       const error = this.answer(conn.user, String(msg.questionId), Number(msg.choice));
       if (error) conn.ws.send(JSON.stringify({ type: "error", error }));
