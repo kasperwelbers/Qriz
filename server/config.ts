@@ -15,7 +15,7 @@ export const config = {
   /** Public URL of the app, used in QR codes and login emails. */
   publicUrl: (process.env.PUBLIC_URL ?? "http://localhost:5173").replace(/\/$/, ""),
   secret,
-  databasePath: process.env.DATABASE_PATH ?? "./data/classquiz.db",
+  databasePath: process.env.DATABASE_PATH ?? "./data/qriz.db",
   /** Only these email domains may log in. Empty means any domain (dev only). */
   allowedEmailDomains: list(process.env.ALLOWED_EMAIL_DOMAINS),
   /** These addresses get the teacher role. */
@@ -32,5 +32,5 @@ export const config = {
   answerGraceMs: 750,
   /** Length of the optional paper round after phones lock. */
   paperSeconds: Number(process.env.PAPER_SECONDS ?? 20),
-  smtp: process.env.SMTP_URL ? { url: process.env.SMTP_URL, from: process.env.SMTP_FROM ?? "ClassQuiz <noreply@localhost>" } : null,
+  smtp: process.env.SMTP_URL ? { url: process.env.SMTP_URL, from: process.env.SMTP_FROM ?? "Qriz <noreply@localhost>" } : null,
 };

@@ -9,7 +9,7 @@ export function Shell({ me, children }: { me?: Me; children: ReactNode }) {
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-4">
           <Link to="/" className="font-semibold">
-            ClassQuiz
+            Qriz
           </Link>
           {me && (
             <div className="flex items-center gap-3 text-sm text-muted-foreground">

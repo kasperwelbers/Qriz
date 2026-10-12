@@ -1,4 +1,4 @@
-# ClassQuiz
+# Qriz
 
 In-class attendance checks and quick quizzes that are hard to do from home or with AI.
 
@@ -33,7 +33,7 @@ cp .env.example .env    # fill in PUBLIC_URL, APP_SECRET, domains, teachers, SMT
 docker compose up -d --build
 ```
 
-The database lives in the `data` volume. Back it up with `sqlite3 /data/classquiz.db ".backup ..."` or by copying the volume while the app is stopped.
+The database lives in the `data` volume. Back it up with `sqlite3 /data/qriz.db ".backup ..."` or by copying the volume while the app is stopped.
 
 ## Layout
 

@@ -54,7 +54,7 @@ export default function Login() {
     <Centered>
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>{joining ? `Log in to join "${joining}"` : "Log in to ClassQuiz"}</CardTitle>
+          <CardTitle>{joining ? `Log in to join "${joining}"` : "Log in to Qriz"}</CardTitle>
           <CardDescription>
             {loginId ? `We sent a 6-digit code to ${email}. You stay logged in on this device afterwards.` : "Use your university email address. We'll send you a login code."}
           </CardDescription>

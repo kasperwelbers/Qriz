@@ -49,6 +49,6 @@ if (config.isProd) {
   app.get("*", serveStatic({ path: "./dist/index.html" }));
 }
 
-console.log(`ClassQuiz listening on :${config.port} (public URL ${config.publicUrl})`);
+console.log(`Qriz listening on :${config.port} (public URL ${config.publicUrl})`);
 
 export default { port: config.port, fetch: app.fetch, websocket };

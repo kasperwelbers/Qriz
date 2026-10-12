@@ -12,7 +12,7 @@ RUN bun install --frozen-lockfile --production
 COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY drizzle ./drizzle
-ENV NODE_ENV=production DATABASE_PATH=/data/classquiz.db
+ENV NODE_ENV=production DATABASE_PATH=/data/qriz.db
 VOLUME /data
 EXPOSE 3000
 CMD ["bun", "server/index.ts"]
