@@ -6,7 +6,7 @@ import { randomId, sha256 } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
 
 type Question = typeof schema.questions.$inferSelect;
-type Phase = "lobby" | "question" | "closed" | "ended";
+type Phase = "lobby" | "question" | "paper" | "closed" | "ended";
 type Role = "presenter" | "student";
 
 interface Conn {
@@ -22,6 +22,8 @@ interface Conn {
  */
 class LiveRun {
   phase: Phase = "lobby";
+  /** When on, a paper round follows each question: options appear on the projector after phones are locked. */
+  paperRound = false;
   qIndex = -1;
   servedAt = 0;
   deadline = 0;
@@ -64,16 +66,32 @@ class LiveRun {
     this.servedAt = Date.now();
     this.deadline = this.servedAt + this.current!.timeLimitSec * 1000;
     this.clearTimer();
-    this.timer = setTimeout(() => this.close(), this.deadline - Date.now() + config.answerGraceMs);
+    this.timer = setTimeout(() => this.endQuestion(), this.deadline - Date.now() + config.answerGraceMs);
     this.broadcast();
     return true;
   }
 
-  close() {
+  /** Locks phone answers; continues with the paper round if enabled, else reveals. */
+  endQuestion() {
     if (this.phase !== "question") return;
+    this.clearTimer();
+    if (!this.paperRound) return this.close();
+    this.phase = "paper";
+    this.deadline = Date.now() + config.paperSeconds * 1000;
+    this.timer = setTimeout(() => this.close(), config.paperSeconds * 1000);
+    this.broadcast();
+  }
+
+  close() {
+    if (this.phase !== "question" && this.phase !== "paper") return;
     this.clearTimer();
     this.phase = "closed";
     this.broadcast();
+  }
+
+  setPaperRound(on: boolean) {
+    this.paperRound = on;
+    this.broadcast("presenter");
   }
 
   end() {
@@ -225,7 +243,9 @@ class LiveRun {
       JSON.stringify({
         ...base,
         prompt: q?.prompt ?? null,
-        options: q?.options ?? [],
+        // While phones can answer, the projector shows only the question, so nobody can signal "it's the 2nd one".
+        options: this.phase === "question" ? [] : (q?.options ?? []),
+        paperRound: this.paperRound,
         correctIndex: this.phase === "closed" ? (q?.correctIndex ?? null) : null,
         counts,
         answeredCount: answers.length,

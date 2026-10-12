@@ -72,13 +72,13 @@ function rateLimited(key: string, max: number, windowMs: number): boolean {
   return hits.length > max;
 }
 
-function emailAllowed(email: string): boolean {
+export function emailAllowed(email: string): boolean {
   if (config.allowedEmailDomains.length === 0) return true;
   const domain = email.split("@")[1] ?? "";
   return config.allowedEmailDomains.includes(domain);
 }
 
-function upsertUser(email: string): User {
+export function upsertUser(email: string): User {
   const role = config.teacherEmails.includes(email) ? "teacher" : "student";
   const existing = db.select().from(schema.users).where(eq(schema.users.email, email)).get();
   if (existing) {

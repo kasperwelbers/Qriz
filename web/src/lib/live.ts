@@ -4,7 +4,7 @@ export type LiveState = {
   type: "state";
   kind: "attendance" | "quiz";
   title: string;
-  phase: "lobby" | "question" | "closed" | "ended";
+  phase: "lobby" | "question" | "paper" | "closed" | "ended";
   qIndex: number;
   total: number;
   deadline: number;
@@ -25,6 +25,7 @@ export type LiveState = {
   disqualifiedCount?: number;
   checkinCount?: number;
   connectedStudents?: number;
+  paperRound?: boolean;
 };
 
 /** Live run connection with automatic reconnect. `offset` maps server time to local time. */

@@ -1,4 +1,4 @@
-import { ChevronRight, Maximize, QrCode, ShieldAlert, Square, Users } from "lucide-react";
+import { ChevronRight, FileText, Maximize, QrCode, ShieldAlert, Square, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Navigate, useParams } from "react-router";
 import QRCode from "react-qr-code";
@@ -40,13 +40,14 @@ export default function Present() {
   const { runId = "" } = useParams();
   const me = useMe();
   const { state, connected, offset } = useLive(runId, "presenter");
-  const left = useCountdown(state?.phase === "question" ? state.deadline : undefined, offset);
+  const timed = state?.phase === "question" || state?.phase === "paper";
+  const left = useCountdown(timed ? state.deadline : undefined, offset);
   const [showQr, setShowQr] = useState(false);
 
   if (me === null) return <Navigate to="/login" replace />;
   if (!state) return <div className="flex min-h-dvh items-center justify-center text-muted-foreground">{connected ? "Loading…" : "Connecting…"}</div>;
 
-  const action = (a: "next" | "close" | "end") => api(`/teacher/runs/${runId}/${a}`, { method: "POST" }).catch((e) => alert(e.message));
+  const action = (a: "next" | "close" | "end" | "paper-on" | "paper-off") => api(`/teacher/runs/${runId}/${a}`, { method: "POST" }).catch((e) => alert(e.message));
   const qrVisible = state.phase === "lobby" || state.kind === "attendance" || showQr;
   const isLast = state.qIndex >= state.total - 1;
 
@@ -62,6 +63,17 @@ export default function Present() {
             <ShieldAlert /> Check-ins
           </a>
         </Button>
+        {state.kind === "quiz" && state.phase !== "ended" && (
+          <Button
+            variant={state.paperRound ? "default" : "secondary"}
+            size="sm"
+            className={cn(state.paperRound && "bg-amber-400 text-neutral-950 hover:bg-amber-300")}
+            title="Show the options after phones are locked, so students without a smartphone can answer on paper"
+            onClick={() => action(state.paperRound ? "paper-off" : "paper-on")}
+          >
+            <FileText /> Paper round {state.paperRound ? "on" : "off"}
+          </Button>
+        )}
         {state.kind === "quiz" && state.phase !== "lobby" && state.phase !== "ended" && (
           <Button variant="secondary" size="sm" onClick={() => setShowQr((v) => !v)}>
             <QrCode /> {showQr ? "Hide QR" : "Show QR"}
@@ -72,9 +84,9 @@ export default function Present() {
             {state.phase === "lobby" ? "Start quiz" : "Next question"} <ChevronRight />
           </Button>
         )}
-        {state.phase === "question" && (
+        {timed && (
           <Button size="sm" variant="secondary" onClick={() => action("close")}>
-            <Square /> Stop timer
+            <Square /> {state.phase === "paper" ? "Reveal answer" : "Stop timer"}
           </Button>
         )}
         {state.phase !== "ended" && (
@@ -103,11 +115,15 @@ export default function Present() {
                   <span>
                     Question {state.qIndex + 1} of {state.total}
                   </span>
-                  <span className={cn("text-6xl font-bold tabular-nums text-white", state.phase === "question" && left <= 5 && "text-red-400")}>
-                    {state.phase === "question" ? Math.ceil(left) : ""}
+                  <span className={cn("text-6xl font-bold tabular-nums text-white", timed && left <= 5 && "text-red-400")}>
+                    {timed ? Math.ceil(left) : ""}
                   </span>
                 </div>
                 <p className="text-4xl leading-tight font-semibold whitespace-pre-wrap">{state.prompt}</p>
+                {state.phase === "question" && <p className="text-2xl text-white/60">Choose your answer on your phone.</p>}
+                {state.phase === "paper" && (
+                  <p className="rounded-lg bg-amber-400/15 px-4 py-2 text-xl text-amber-200">Phones are locked. On paper? Write down the letter of your answer.</p>
+                )}
                 <div className="grid gap-4 sm:grid-cols-2">
                   {state.options?.map((o, i) => {
                     const total = state.counts?.reduce((a, b) => a + b, 0) || 1;

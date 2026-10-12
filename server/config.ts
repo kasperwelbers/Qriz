@@ -30,5 +30,7 @@ export const config = {
   pendingJoinMs: Number(process.env.PENDING_JOIN_MS ?? 10 * 60_000),
   /** Grace period on question deadlines for network latency. */
   answerGraceMs: 750,
+  /** Length of the optional paper round after phones lock. */
+  paperSeconds: Number(process.env.PAPER_SECONDS ?? 20),
   smtp: process.env.SMTP_URL ? { url: process.env.SMTP_URL, from: process.env.SMTP_FROM ?? "ClassQuiz <noreply@localhost>" } : null,
 };

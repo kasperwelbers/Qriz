@@ -38,6 +38,8 @@ export default function Play() {
     if (state.phase === "ended") return <Message title="Session ended" text="Thanks for taking part." />;
     if (state.kind === "attendance") return <Message icon={<CheckCircle2 className="size-12 text-green-600" />} title="You're checked in" text={state.title} />;
     if (state.phase === "lobby") return <Message title="You're in" text="Keep this page open. The first question will appear on the screen." />;
+    if (state.phase === "paper")
+      return <Message title="Time's up" text={answer !== null ? "Your answer is locked in. The right answer comes up in a moment." : "You didn't answer this one."} />;
     if (state.phase === "closed") {
       const correct = state.correctIndex;
       const right = !state.disqualified && answer !== null && answer === correct;

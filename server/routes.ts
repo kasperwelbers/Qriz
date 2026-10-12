@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Context } from "hono";
-import { type AppEnv, deviceId, requireTeacher, requireUser, type User } from "./auth.ts";
+import { type AppEnv, deviceId, emailAllowed, requireTeacher, requireUser, upsertUser, type User } from "./auth.ts";
 import { config } from "./config.ts";
 import { randomId, seal, unseal } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
@@ -10,6 +10,8 @@ import { getLiveRun } from "./live.ts";
 
 const PENDING_JOIN_COOKIE = "pj";
 const SHARED_DEVICE = "same phone as another student";
+/** Device id used for students whose answers the teacher entered from paper. */
+const PAPER = "paper";
 
 type QuestionInput = { id?: string; prompt: string; options: string[]; correctIndex: number | null; timeLimitSec: number };
 type TaskInput = { title: string; kind: "attendance" | "quiz"; questions?: QuestionInput[] };
@@ -123,14 +125,47 @@ export const teacherRoutes = new Hono<AppEnv>()
     return c.json({ url: `${config.publicUrl}/j/${token}`, rotateMs: config.qrRotateMs });
   })
 
-  .post("/runs/:id/:action{next|close|end}", (c) => {
+  .post("/runs/:id/:action{next|close|end|paper-on|paper-off}", (c) => {
     const row = ownedRun(c, c.req.param("id"));
     if (!row) return c.json({ error: "Not found" }, 404);
     const lr = getLiveRun(row.run.id)!;
     const action = c.req.param("action");
     if (action === "next" && !lr.next()) return c.json({ error: "No more questions" }, 400);
-    if (action === "close") lr.close();
+    if (action === "close") lr.phase === "question" ? lr.endQuestion() : lr.close();
+    if (action === "paper-on" || action === "paper-off") lr.setPaperRound(action === "paper-on");
     if (action === "end") lr.end();
+    return c.json({ ok: true });
+  })
+
+  /** Students without a smartphone answer on paper; the teacher enters their answers here. Re-submitting overwrites. */
+  .post("/runs/:id/paper-answers", async (c) => {
+    const row = ownedRun(c, c.req.param("id"));
+    if (!row) return c.json({ error: "Not found" }, 404);
+    const body = await c.req.json<{ email?: string; answers?: (number | null)[] }>();
+    const email = body.email?.trim().toLowerCase() ?? "";
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !emailAllowed(email)) return c.json({ error: "Enter the student's university email address" }, 400);
+    const questions = getQuestions(row.task.id);
+    const answers = body.answers ?? [];
+    if (answers.some((a, i) => a !== null && !(Number.isInteger(a) && a >= 0 && a < (questions[i]?.options.length ?? 0))))
+      return c.json({ error: "Invalid answer" }, 400);
+
+    const user = upsertUser(email);
+    const existing = db.select().from(schema.checkins).where(and(eq(schema.checkins.runId, row.run.id), eq(schema.checkins.userId, user.id))).get();
+    if (existing && existing.deviceId !== PAPER) return c.json({ error: "This student already checked in with a phone" }, 400);
+    const now = Date.now();
+    db.transaction((tx) => {
+      if (!existing)
+        tx.insert(schema.checkins)
+          .values({ id: randomId(), runId: row.run.id, userId: user.id, qrIssuedAt: now, scannedAt: now, completedAt: now, deviceId: PAPER, flags: [] })
+          .run();
+      tx.delete(schema.answers).where(and(eq(schema.answers.runId, row.run.id), eq(schema.answers.userId, user.id))).run();
+      questions.forEach((q, i) => {
+        const choice = answers[i];
+        if (choice === null || choice === undefined) return;
+        tx.insert(schema.answers).values({ id: randomId(), runId: row.run.id, questionId: q.id, userId: user.id, choice, servedAt: now, answeredAt: now }).run();
+      });
+    });
+    getLiveRun(row.run.id)?.onCheckin();
     return c.json({ ok: true });
   })
 
@@ -185,13 +220,14 @@ function results(run: typeof schema.runs.$inferSelect, task: typeof schema.tasks
   }
   const [mainNet, mainCount] = [...nets].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
   if (mainNet && checkins.length >= 5 && mainCount / checkins.length >= 0.5) {
-    for (const { checkin } of checkins) if (net(checkin.ip) !== mainNet) suspicion.get(checkin.userId)!.push("different network");
+    for (const { checkin } of checkins) if (checkin.ip && net(checkin.ip) !== mainNet) suspicion.get(checkin.userId)!.push("different network");
   }
 
   // Answer sharing: two students repeatedly giving the same answer within seconds, including a shared wrong one.
   const byUser = new Map<string, Map<string, (typeof answers)[number]>>();
+  const paperUsers = new Set(checkins.filter(({ checkin }) => checkin.deviceId === PAPER).map(({ checkin }) => checkin.userId));
   for (const a of answers) {
-    if (a.disqualified) continue;
+    if (a.disqualified || paperUsers.has(a.userId)) continue;
     if (!byUser.has(a.userId)) byUser.set(a.userId, new Map());
     byUser.get(a.userId)!.set(a.questionId, a);
   }
@@ -230,6 +266,7 @@ function results(run: typeof schema.runs.$inferSelect, task: typeof schema.tasks
         qrIssuedAt: checkin.qrIssuedAt,
         completedAt: checkin.completedAt,
         ip: checkin.ip,
+        paper: checkin.deviceId === PAPER,
         suspicion: [...new Set(suspicion.get(checkin.userId))],
         score: mine.filter((a, i) => a && !a.disqualified && a.choice === questions[i]!.correctIndex).length,
         answers: mine.map((a) => a && { choice: a.choice, disqualified: a.disqualified, reason: a.reason, flag: a.flag, ms: a.answeredAt - a.servedAt }),
