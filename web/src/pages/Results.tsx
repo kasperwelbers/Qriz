@@ -7,12 +7,12 @@ import { Button } from "@/components/ui/button";
 import { api, letter, type Question, useMe } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type Answer = { choice: number; disqualified: boolean; reason: string | null; ms: number } | null;
+type Answer = { choice: number; disqualified: boolean; reason: string | null; flag: string | null; ms: number } | null;
 type Results = {
   task: { title: string; kind: string };
-  run: { startedAt: number };
+  run: { startedAt: number; endedAt: number | null };
   questions: (Question & { id: string })[];
-  students: { userId: string; email: string; scannedAt: number; qrIssuedAt: number; completedAt: number; flags: string[]; score: number; answers: Answer[] }[];
+  students: { userId: string; email: string; scannedAt: number; qrIssuedAt: number; completedAt: number; suspicion: string[]; score: number; answers: Answer[] }[];
 };
 
 export default function Results() {
@@ -20,9 +20,16 @@ export default function Results() {
   const me = useMe();
   const [data, setData] = useState<Results | null>(null);
 
+  const live = data !== null && data.run.endedAt === null;
   useEffect(() => {
-    if (me?.role === "teacher") api<Results>(`/teacher/runs/${runId}/results`).then(setData);
-  }, [me, runId]);
+    if (me?.role !== "teacher") return;
+    const load = () => api<Results>(`/teacher/runs/${runId}/results`).then(setData);
+    load();
+    // Keep refreshing while the session runs, so this works as a live check-in list on the teacher's own screen.
+    if (!live) return;
+    const id = setInterval(load, 4000);
+    return () => clearInterval(id);
+  }, [me, runId, live]);
 
   if (me === null) return <Navigate to="/login" replace />;
   if (!data) return null;
@@ -34,7 +41,13 @@ export default function Results() {
           <h1 className="text-2xl font-semibold">{data.task.title}</h1>
           <p className="text-muted-foreground">
             {new Date(data.run.startedAt).toLocaleString()} · {data.students.length} checked in
+            {live && " · live"}
           </p>
+          {data.students.some((s) => s.suspicion.length) && (
+            <p className="mt-1 text-sm text-amber-700">
+              {data.students.filter((s) => s.suspicion.length).length} student(s) with something worth a second look. These are hints, not proof.
+            </p>
+          )}
         </div>
         <Button variant="outline" asChild>
           <a href={`/api/teacher/runs/${runId}/export.csv`}>
@@ -62,16 +75,15 @@ export default function Results() {
                 <td className="p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {s.email}
-                    {s.flags.map((f) => (
-                      <Badge key={f} variant="destructive" title="This phone also checked in another account">
+                    {s.suspicion.map((f) => (
+                      <Badge key={f} variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
                         {f}
                       </Badge>
                     ))}
                   </div>
                 </td>
-                <td className="p-3 text-muted-foreground" title={`QR was ${((s.scannedAt - s.qrIssuedAt) / 1000).toFixed(1)}s old when scanned`}>
+                <td className="p-3 text-muted-foreground" title={`QR was ${((s.scannedAt - s.qrIssuedAt) / 1000).toFixed(1)} s old when scanned`}>
                   {new Date(s.scannedAt).toLocaleTimeString()}
-                  {s.completedAt - s.scannedAt > 60_000 && ` (login took ${Math.round((s.completedAt - s.scannedAt) / 60_000)} min)`}
                 </td>
                 {data.questions.length > 0 && (
                   <td className="p-3 font-medium">
@@ -81,7 +93,7 @@ export default function Results() {
                 {s.answers.map((a, i) => (
                   <td
                     key={i}
-                    title={a ? `${(a.ms / 1000).toFixed(1)}s${a.reason ? ` · ${a.reason}` : ""}` : "No answer"}
+                    title={a ? `${(a.ms / 1000).toFixed(1)} s${a.reason ? ` · ${a.reason}` : ""}${a.flag ? ` · ${a.flag}` : ""}` : "No answer"}
                     className={cn(
                       "p-3 text-center font-medium",
                       a && !a.disqualified && a.choice === data.questions[i]!.correctIndex && "text-green-600",
@@ -90,6 +102,7 @@ export default function Results() {
                     )}
                   >
                     {a ? letter(a.choice) : "–"}
+                    {a?.flag && <span className="text-amber-600">*</span>}
                   </td>
                 ))}
               </tr>

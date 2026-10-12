@@ -1,4 +1,4 @@
-import { ChevronRight, Maximize, QrCode, Square, Users } from "lucide-react";
+import { ChevronRight, Maximize, QrCode, ShieldAlert, Square, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Navigate, useParams } from "react-router";
 import QRCode from "react-qr-code";
@@ -57,6 +57,11 @@ export default function Present() {
         <span className="flex items-center gap-1.5 text-sm text-white/70">
           <Users className="size-4" /> {state.checkinCount} checked in
         </span>
+        <Button variant="secondary" size="sm" asChild>
+          <a href={`/results/${runId}`} target="_blank" rel="noreferrer" title="Open on your laptop or phone, not on the projector">
+            <ShieldAlert /> Check-ins
+          </a>
+        </Button>
         {state.kind === "quiz" && state.phase !== "lobby" && state.phase !== "ended" && (
           <Button variant="secondary" size="sm" onClick={() => setShowQr((v) => !v)}>
             <QrCode /> {showQr ? "Hide QR" : "Show QR"}

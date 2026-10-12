@@ -2,7 +2,7 @@ import { and, asc, count, eq } from "drizzle-orm";
 import type { WSContext } from "hono/ws";
 import type { User } from "./auth.ts";
 import { config } from "./config.ts";
-import { randomId } from "./crypto.ts";
+import { randomId, sha256 } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
 
 type Question = typeof schema.questions.$inferSelect;
@@ -27,8 +27,10 @@ class LiveRun {
   deadline = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private conns = new Set<Conn>();
-  /** Users who hid the page or lost connection during the current question, with the reason. */
+  /** Users who left the page during the current question: their answer is disqualified. */
   private focusLost = new Map<string, string>();
+  /** Users whose connection dropped during the current question: flagged, not disqualified (could be bad wifi). */
+  private connectionLost = new Set<string>();
 
   constructor(
     readonly runId: string,
@@ -50,10 +52,7 @@ class LiveRun {
 
   leave(conn: Conn) {
     this.conns.delete(conn);
-    if (conn.role === "student" && this.phase === "question" && config.disqualifyOnDisconnect) {
-      // On phones, switching apps usually kills the socket before a visibility event arrives.
-      this.markFocusLost(conn.user.id, "connection lost");
-    }
+    if (conn.role === "student" && this.phase === "question") this.markConnectionLost(conn.user.id);
   }
 
   next() {
@@ -61,6 +60,7 @@ class LiveRun {
     this.qIndex++;
     this.phase = "question";
     this.focusLost.clear();
+    this.connectionLost.clear();
     this.servedAt = Date.now();
     this.deadline = this.servedAt + this.current!.timeLimitSec * 1000;
     this.clearTimer();
@@ -123,7 +123,7 @@ class LiveRun {
     const reason = this.focusLost.get(user.id) ?? null;
     const inserted = db
       .insert(schema.answers)
-      .values({ id: randomId(), runId: this.runId, questionId, userId: user.id, choice, servedAt: this.servedAt, answeredAt: now, disqualified: reason !== null, reason })
+      .values({ id: randomId(), runId: this.runId, questionId, userId: user.id, choice, servedAt: this.servedAt, answeredAt: now, disqualified: reason !== null, reason, flag: this.connectionLost.has(user.id) ? "connection lost" : null })
       .onConflictDoNothing()
       .returning()
       .get();
@@ -143,6 +143,18 @@ class LiveRun {
         .run();
     }
     this.broadcast();
+  }
+
+  private markConnectionLost(userId: string) {
+    if (this.connectionLost.has(userId)) return;
+    this.connectionLost.add(userId);
+    const q = this.current;
+    if (q) {
+      db.update(schema.answers)
+        .set({ flag: "connection lost" })
+        .where(and(eq(schema.answers.runId, this.runId), eq(schema.answers.questionId, q.id), eq(schema.answers.userId, userId)))
+        .run();
+    }
   }
 
   private clearTimer() {
@@ -179,7 +191,8 @@ class LiveRun {
     };
 
     if (conn.role === "student") {
-      // Students never receive question text or options: those only appear on the projector.
+      // The question text only appears on the projector. Options are sent in a per-student order,
+      // so "the answer is B" can't be passed around.
       const mine = q
         ? db
             .select()
@@ -190,6 +203,7 @@ class LiveRun {
       conn.ws.send(
         JSON.stringify({
           ...base,
+          choices: q ? shuffledOptions(q, conn.user.id) : [],
           myAnswer: mine?.choice ?? null,
           disqualified: mine?.disqualified || this.focusLost.has(conn.user.id),
           correctIndex: this.phase === "closed" ? (q?.correctIndex ?? null) : null,
@@ -221,6 +235,17 @@ class LiveRun {
       }),
     );
   }
+}
+
+/** Options in a stable per-student random order, keeping each option's original index. */
+function shuffledOptions(q: Question, userId: string): { index: number; text: string }[] {
+  const items = q.options.map((text, index) => ({ index, text }));
+  const seed = Buffer.from(sha256(`${q.id}:${userId}`), "base64url");
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = seed.readUInt16BE((i * 2) % (seed.length - 1)) % (i + 1);
+    [items[i], items[j]] = [items[j]!, items[i]!];
+  }
+  return items;
 }
 
 const live = new Map<string, LiveRun>();

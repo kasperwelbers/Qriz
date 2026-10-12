@@ -2,9 +2,10 @@
 
 In-class attendance checks and quick quizzes that are hard to do from home or with AI.
 
-- **Rotating QR check-in.** The projector shows a QR code that changes every 2 seconds. Each code carries a server-signed timestamp and is only accepted for 15 seconds, so a photo sent to an absent friend is useless. The server records the QR timestamp, the scan time and a per-browser device id; one phone checking in several accounts is flagged as `shared-device`.
-- **Teacher-paced quizzes.** Questions and options appear only on the projector. Phones show only the answer letters and a countdown, so there is nothing on the phone to copy, screenshot or paste into an AI.
-- **Focus rule.** If a student leaves the page during a question (app switch, blur, or the connection dropping), that answer is disqualified. The server enforces deadlines; the client only reports.
+- **Rotating QR check-in.** The projector shows a QR code that changes every 2 seconds. Each code carries a server-signed timestamp and is accepted for 8 seconds; scans slower than 5 seconds are accepted but flagged. Forwarding a photo to an absent friend takes longer than that.
+- **Teacher-paced quizzes.** The question only appears on the projector. Phones show the answer options in a different random order for every student, plus a countdown. A group chat can't pass around "the answer is B", and asking an AI means photographing the projector.
+- **Focus rule.** If a student leaves the page during a question (app switch or blur), that answer is disqualified. A dropped connection is only flagged, since classroom wifi can be flaky. The server enforces deadlines; the client only reports.
+- **Hints, not blocks.** The results page (open it on your own screen via "Check-ins" during class; it refreshes live) lists things worth a second look: slow scans, slow logins, the same phone used for two accounts (httpOnly device cookie), a network different from most of the room, dropped connections, and pairs of students who repeatedly give the same answer within seconds, including a shared wrong one.
 - **Magic-link / code login.** Students log in with their university email and a 6-digit code (or the emailed link) and stay logged in on that device for 180 days. A student who scans before logging in keeps their scan for 10 minutes while they log in.
 
 ## Stack

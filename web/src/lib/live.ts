@@ -13,7 +13,8 @@ export type LiveState = {
   optionCount: number;
   questionId: string | null;
   correctIndex: number | null;
-  // student only
+  // student only: options in this student's own order, with their original index
+  choices?: { index: number; text: string }[];
   myAnswer?: number | null;
   disqualified?: boolean;
   // presenter only

@@ -9,6 +9,7 @@ import { db, schema } from "./db/index.ts";
 import { getLiveRun } from "./live.ts";
 
 const PENDING_JOIN_COOKIE = "pj";
+const SHARED_DEVICE = "same phone as another student";
 
 type QuestionInput = { id?: string; prompt: string; options: string[]; correctIndex: number | null; timeLimitSec: number };
 type TaskInput = { title: string; kind: "attendance" | "quiz"; questions?: QuestionInput[] };
@@ -151,7 +152,7 @@ export const teacherRoutes = new Hono<AppEnv>()
         new Date(s.scannedAt).toISOString(),
         ((s.scannedAt - s.qrIssuedAt) / 1000).toFixed(1),
         ((s.completedAt - s.scannedAt) / 1000).toFixed(0),
-        s.flags.join(" "),
+        s.suspicion.join("; "),
         ...(r.questions.length ? [s.score] : []),
         ...s.answers.map((a) => (a ? `${String.fromCharCode(65 + a.choice)}${a.disqualified ? " (DQ)" : ""}` : "")),
       ]
@@ -173,6 +174,49 @@ function results(run: typeof schema.runs.$inferSelect, task: typeof schema.tasks
     .orderBy(asc(schema.checkins.scannedAt))
     .all();
   const answers = db.select().from(schema.answers).where(eq(schema.answers.runId, run.id)).all();
+  const suspicion = new Map<string, string[]>(checkins.map(({ checkin }) => [checkin.userId, [...checkin.flags]]));
+
+  // Network: flag check-ins from outside the network most of the room is on. Weak signal (mobile data is common).
+  const net = (ip: string | null) => (ip ? (ip.includes(":") ? ip.split(":").slice(0, 3).join(":") : ip.split(".").slice(0, 2).join(".")) : null);
+  const nets = new Map<string, number>();
+  for (const { checkin } of checkins) {
+    const n = net(checkin.ip);
+    if (n) nets.set(n, (nets.get(n) ?? 0) + 1);
+  }
+  const [mainNet, mainCount] = [...nets].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
+  if (mainNet && checkins.length >= 5 && mainCount / checkins.length >= 0.5) {
+    for (const { checkin } of checkins) if (net(checkin.ip) !== mainNet) suspicion.get(checkin.userId)!.push("different network");
+  }
+
+  // Answer sharing: two students repeatedly giving the same answer within seconds, including a shared wrong one.
+  const byUser = new Map<string, Map<string, (typeof answers)[number]>>();
+  for (const a of answers) {
+    if (a.disqualified) continue;
+    if (!byUser.has(a.userId)) byUser.set(a.userId, new Map());
+    byUser.get(a.userId)!.set(a.questionId, a);
+  }
+  const emailOf = new Map(checkins.map(({ checkin, email }) => [checkin.userId, email]));
+  const users = [...byUser.keys()];
+  for (let i = 0; i < users.length; i++) {
+    for (let j = i + 1; j < users.length; j++) {
+      let together = 0;
+      let wrongTogether = 0;
+      for (const q of questions) {
+        const a = byUser.get(users[i]!)!.get(q.id);
+        const b = byUser.get(users[j]!)!.get(q.id);
+        if (a && b && a.choice === b.choice && Math.abs(a.answeredAt - b.answeredAt) <= 2000) {
+          together++;
+          if (q.correctIndex !== null && a.choice !== q.correctIndex) wrongTogether++;
+        }
+      }
+      if (together >= 2 && wrongTogether >= 1) {
+        suspicion.get(users[i]!)?.push(`answers in sync with ${emailOf.get(users[j]!)}`);
+        suspicion.get(users[j]!)?.push(`answers in sync with ${emailOf.get(users[i]!)}`);
+      }
+    }
+  }
+  for (const a of answers) if (a.flag) suspicion.get(a.userId)?.push(`${a.flag} on Q${questions.findIndex((q) => q.id === a.questionId) + 1}`);
+
   return {
     run,
     task,
@@ -185,9 +229,10 @@ function results(run: typeof schema.runs.$inferSelect, task: typeof schema.tasks
         scannedAt: checkin.scannedAt,
         qrIssuedAt: checkin.qrIssuedAt,
         completedAt: checkin.completedAt,
-        flags: checkin.flags,
+        ip: checkin.ip,
+        suspicion: [...new Set(suspicion.get(checkin.userId))],
         score: mine.filter((a, i) => a && !a.disqualified && a.choice === questions[i]!.correctIndex).length,
-        answers: mine.map((a) => a && { choice: a.choice, disqualified: a.disqualified, reason: a.reason, ms: a.answeredAt - a.servedAt }),
+        answers: mine.map((a) => a && { choice: a.choice, disqualified: a.disqualified, reason: a.reason, flag: a.flag, ms: a.answeredAt - a.servedAt }),
       };
     }),
   };
@@ -211,16 +256,19 @@ function checkin(c: Context<AppEnv>, user: User, runId: string, qrIssuedAt: numb
   if (existing) return existing;
 
   const flags: string[] = [];
+  const now = Date.now();
+  if (scannedAt - qrIssuedAt > config.qrSlowScanMs) flags.push(`slow scan (${((scannedAt - qrIssuedAt) / 1000).toFixed(1)} s)`);
+  if (now - scannedAt > 2 * 60_000) flags.push(`login took ${Math.round((now - scannedAt) / 60_000)} min`);
   const sameDevice = db
     .select()
     .from(schema.checkins)
     .where(and(eq(schema.checkins.runId, runId), eq(schema.checkins.deviceId, did), ne(schema.checkins.userId, user.id)))
     .all();
   if (sameDevice.length) {
-    flags.push("shared-device");
+    flags.push(SHARED_DEVICE);
     for (const other of sameDevice) {
-      if (!other.flags.includes("shared-device"))
-        db.update(schema.checkins).set({ flags: [...other.flags, "shared-device"] }).where(eq(schema.checkins.id, other.id)).run();
+      if (!other.flags.includes(SHARED_DEVICE))
+        db.update(schema.checkins).set({ flags: [...other.flags, SHARED_DEVICE] }).where(eq(schema.checkins.id, other.id)).run();
     }
   }
   const row = db
@@ -231,7 +279,7 @@ function checkin(c: Context<AppEnv>, user: User, runId: string, qrIssuedAt: numb
       userId: user.id,
       qrIssuedAt,
       scannedAt,
-      completedAt: Date.now(),
+      completedAt: now,
       deviceId: did,
       ip: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
       userAgent: c.req.header("user-agent")?.slice(0, 300),

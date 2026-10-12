@@ -95,6 +95,8 @@ export const answers = sqliteTable(
     answeredAt: integer("answered_at").notNull(),
     disqualified: integer("disqualified", { mode: "boolean" }).notNull().default(false),
     reason: text("reason"),
+    /** A suspicious event that does not disqualify, e.g. the connection dropped mid-question. */
+    flag: text("flag"),
   },
   (t) => [uniqueIndex("answers_run_q_user_idx").on(t.runId, t.questionId, t.userId)],
 );

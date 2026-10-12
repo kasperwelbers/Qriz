@@ -21,14 +21,14 @@ export const config = {
   /** These addresses get the teacher role. */
   teacherEmails: list(process.env.TEACHER_EMAILS),
   sessionDays: Number(process.env.SESSION_DAYS ?? 180),
-  /** How old a scanned QR timestamp may be. Covers phone camera focus + network latency. */
-  qrMaxAgeMs: Number(process.env.QR_MAX_AGE_MS ?? 15_000),
+  /** How old a scanned QR timestamp may be. Covers display lag, camera focus and the tap to open the link. */
+  qrMaxAgeMs: Number(process.env.QR_MAX_AGE_MS ?? 8_000),
+  /** Scans slower than this are accepted but flagged for the teacher. Forwarding a photo usually takes longer. */
+  qrSlowScanMs: Number(process.env.QR_SLOW_SCAN_MS ?? 5_000),
   qrRotateMs: Number(process.env.QR_ROTATE_MS ?? 2_000),
   /** Time a student has to finish logging in after scanning a valid code. */
   pendingJoinMs: Number(process.env.PENDING_JOIN_MS ?? 10 * 60_000),
   /** Grace period on question deadlines for network latency. */
   answerGraceMs: 750,
-  /** Disqualify the current answer when a student's connection drops mid-question (phones drop it when switching apps). */
-  disqualifyOnDisconnect: process.env.DISQUALIFY_ON_DISCONNECT !== "false",
   smtp: process.env.SMTP_URL ? { url: process.env.SMTP_URL, from: process.env.SMTP_FROM ?? "ClassQuiz <noreply@localhost>" } : null,
 };

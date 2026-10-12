@@ -2,13 +2,12 @@ import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Centered } from "@/components/Shell";
-import { letter } from "@/lib/api";
 import { useCountdown, useLive } from "@/lib/live";
 import { cn } from "@/lib/utils";
 
 const COLORS = ["bg-red-500", "bg-blue-500", "bg-amber-500", "bg-green-600", "bg-purple-500", "bg-pink-500"];
 
-/** The student's phone during a quiz: only answer letters and a timer, never the question text. */
+/** The student's phone during a quiz: the options in a per-student order and a timer, never the question text. */
 export default function Play() {
   const { runId = "" } = useParams();
   const { state, error, connected, send, offset } = useLive(runId, "student");
@@ -46,7 +45,7 @@ export default function Play() {
         <Message
           icon={right ? <CheckCircle2 className="size-12 text-green-600" /> : <XCircle className="size-12 text-red-500" />}
           title={state.disqualified ? "Not counted" : answer === null ? "No answer" : right ? "Correct" : "Not quite"}
-          text={correct !== null ? `The answer was ${letter(correct)}.` : "Wait for the next question."}
+          text={correct !== null ? `The answer was: ${state.choices?.find((c) => c.index === correct)?.text}` : "Wait for the next question."}
         />
       );
     }
@@ -64,27 +63,27 @@ export default function Play() {
         {state.disqualified && (
           <p className="rounded-md bg-red-500/10 p-3 text-sm text-red-600">You left the app during this question, so your answer won't count.</p>
         )}
-        <div className={cn("grid flex-1 gap-3", state.optionCount > 4 ? "grid-cols-2 grid-rows-3" : "grid-cols-2 grid-rows-2")}>
-          {Array.from({ length: state.optionCount }, (_, i) => (
+        <div className="flex flex-1 flex-col gap-3">
+          {state.choices?.map((c, i) => (
             <button
-              key={i}
+              key={c.index}
               disabled={answer !== null || left <= 0}
               onClick={() => {
-                setPicked(i);
-                send({ type: "answer", questionId: state.questionId, choice: i });
+                setPicked(c.index);
+                send({ type: "answer", questionId: state.questionId, choice: c.index });
               }}
               className={cn(
-                "rounded-2xl text-6xl font-bold text-white transition-opacity",
+                "flex min-h-16 flex-1 items-center rounded-2xl px-5 py-3 text-left text-xl font-semibold text-white transition-opacity",
                 COLORS[i],
-                answer !== null && answer !== i && "opacity-25",
-                answer === i && "ring-4 ring-foreground ring-offset-2",
+                answer !== null && answer !== c.index && "opacity-25",
+                answer === c.index && "ring-4 ring-foreground ring-offset-2",
               )}
             >
-              {letter(i)}
+              {c.text}
             </button>
           ))}
         </div>
-        <p className="h-5 text-center text-sm text-muted-foreground">{answer !== null ? `Answer ${letter(answer)} locked in` : error}</p>
+        <p className="h-5 text-center text-sm text-muted-foreground">{answer !== null ? "Answer locked in" : error}</p>
       </div>
     );
   })();
