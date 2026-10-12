@@ -1,0 +1,4 @@
+# Replace with your domain; Caddy fetches the TLS certificate automatically.
+quiz.example.university.nl {
+	reverse_proxy app:3000
+}
