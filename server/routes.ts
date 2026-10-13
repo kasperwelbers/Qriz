@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Context } from "hono";
 import { type AppEnv, deviceId, emailAllowed, requireTeacher, requireUser, upsertUser, type User } from "./auth.ts";
+import { checkSettings } from "./checks.ts";
 import { config } from "./config.ts";
 import { randomId, seal, unseal } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
@@ -13,18 +14,37 @@ const SHARED_DEVICE = "same phone as another student";
 /** Device id used for students whose answers the teacher entered from paper. */
 const PAPER = "paper";
 
-type QuestionInput = { id?: string; prompt: string; options: string[]; correctIndex: number | null; timeLimitSec: number };
-type TaskInput = { title: string; kind: "attendance" | "quiz"; questions?: QuestionInput[] };
+type QuestionInput = {
+  id?: string;
+  type?: "choice" | "open";
+  prompt: string;
+  options: string[];
+  correctIndex: number | null;
+  scoring?: "correct" | "attempt";
+  askConfidence?: boolean;
+  timeLimitSec: number;
+};
+type TaskInput = { title: string; kind: "attendance" | "quiz"; checks?: Record<string, string>; questions?: QuestionInput[] };
+type QuestionRow = typeof schema.questions.$inferSelect;
+type AnswerRow = typeof schema.answers.$inferSelect;
+
+/** One point per question: for the right answer, or for any answer when the question counts attempts (polls and open questions always do). */
+function earnsPoint(q: QuestionRow, a: AnswerRow | null | undefined): boolean {
+  if (!a || a.disqualified) return false;
+  if (q.type === "open" || q.scoring === "attempt" || q.correctIndex === null) return true;
+  return a.choice === q.correctIndex;
+}
 
 function validateTask(body: TaskInput): string | null {
   if (!body.title?.trim()) return "Title is required";
   if (body.kind !== "attendance" && body.kind !== "quiz") return "Invalid kind";
   for (const q of body.questions ?? []) {
     if (!q.prompt?.trim()) return "Every question needs a prompt";
+    if (q.type === "open") continue;
     if (!Array.isArray(q.options) || q.options.length < 2 || q.options.length > 6) return "Questions need 2 to 6 options";
     if (q.correctIndex !== null && (q.correctIndex < 0 || q.correctIndex >= q.options.length)) return "Invalid correct answer";
-    if (!(q.timeLimitSec >= 5 && q.timeLimitSec <= 600)) return "Time limit must be 5 to 600 seconds";
   }
+  for (const q of body.questions ?? []) if (!(q.timeLimitSec >= 5 && q.timeLimitSec <= 600)) return "Time limit must be 5 to 600 seconds";
   return null;
 }
 
@@ -34,7 +54,17 @@ function saveQuestions(taskId: string, input: QuestionInput[]) {
   const removed = existing.map((q) => q.id).filter((id) => !keep.has(id));
   if (removed.length) db.delete(schema.questions).where(inArray(schema.questions.id, removed)).run();
   input.forEach((q, position) => {
-    const values = { prompt: q.prompt.trim(), options: q.options.map((o) => o.trim()), correctIndex: q.correctIndex, timeLimitSec: Math.round(q.timeLimitSec), position };
+    const open = q.type === "open";
+    const values = {
+      type: open ? ("open" as const) : ("choice" as const),
+      prompt: q.prompt.trim(),
+      options: open ? [] : q.options.map((o) => o.trim()),
+      correctIndex: open ? null : q.correctIndex,
+      scoring: open || q.correctIndex === null || q.scoring === "attempt" ? ("attempt" as const) : ("correct" as const),
+      askConfidence: !open && !!q.askConfidence,
+      timeLimitSec: Math.round(q.timeLimitSec),
+      position,
+    };
     if (q.id && existing.some((e) => e.id === q.id)) db.update(schema.questions).set(values).where(eq(schema.questions.id, q.id)).run();
     else db.insert(schema.questions).values({ id: randomId(), taskId, ...values }).run();
   });
@@ -80,7 +110,11 @@ export const teacherRoutes = new Hono<AppEnv>()
     const body = await c.req.json<TaskInput>();
     const error = validateTask(body);
     if (error) return c.json({ error }, 400);
-    const task = db.insert(schema.tasks).values({ id: randomId(), ownerId: c.get("user")!.id, title: body.title.trim(), kind: body.kind }).returning().get();
+    const task = db
+      .insert(schema.tasks)
+      .values({ id: randomId(), ownerId: c.get("user")!.id, title: body.title.trim(), kind: body.kind, checks: checkSettings(body.checks) })
+      .returning()
+      .get();
     saveQuestions(task.id, body.kind === "quiz" ? (body.questions ?? []) : []);
     return c.json(task);
   })
@@ -88,7 +122,7 @@ export const teacherRoutes = new Hono<AppEnv>()
   .get("/tasks/:id", (c) => {
     const task = ownedTask(c, c.req.param("id"));
     if (!task) return c.json({ error: "Not found" }, 404);
-    return c.json({ ...task, questions: getQuestions(task.id) });
+    return c.json({ ...task, checks: checkSettings(task.checks), questions: getQuestions(task.id) });
   })
 
   .put("/tasks/:id", async (c) => {
@@ -97,7 +131,7 @@ export const teacherRoutes = new Hono<AppEnv>()
     const body = await c.req.json<TaskInput>();
     const error = validateTask(body);
     if (error) return c.json({ error }, 400);
-    db.update(schema.tasks).set({ title: body.title.trim(), kind: body.kind }).where(eq(schema.tasks.id, task.id)).run();
+    db.update(schema.tasks).set({ title: body.title.trim(), kind: body.kind, checks: checkSettings(body.checks) }).where(eq(schema.tasks.id, task.id)).run();
     saveQuestions(task.id, body.kind === "quiz" ? (body.questions ?? []) : []);
     return c.json({ ok: true });
   })
@@ -125,7 +159,7 @@ export const teacherRoutes = new Hono<AppEnv>()
     return c.json({ url: `${config.publicUrl}/j/${token}`, rotateMs: config.qrRotateMs });
   })
 
-  .post("/runs/:id/:action{next|close|end|paper-on|paper-off|names-on|names-off}", (c) => {
+  .post("/runs/:id/:action{next|close|end|paper-on|paper-off|names-on|names-off|responses-on|responses-off}", (c) => {
     const row = ownedRun(c, c.req.param("id"));
     if (!row) return c.json({ error: "Not found" }, 404);
     const lr = getLiveRun(row.run.id)!;
@@ -134,6 +168,7 @@ export const teacherRoutes = new Hono<AppEnv>()
     if (action === "close") lr.phase === "question" ? lr.endQuestion() : lr.close();
     if (action === "paper-on" || action === "paper-off") lr.setPaperRound(action === "paper-on");
     if (action === "names-on" || action === "names-off") lr.setShowNames(action === "names-on");
+    if (action === "responses-on" || action === "responses-off") lr.setShowResponses(action === "responses-on");
     if (action === "end") lr.end();
     return c.json({ ok: true });
   })
@@ -147,7 +182,7 @@ export const teacherRoutes = new Hono<AppEnv>()
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !emailAllowed(email)) return c.json({ error: "Enter the student's university email address" }, 400);
     const questions = getQuestions(row.task.id);
     const answers = body.answers ?? [];
-    if (answers.some((a, i) => a !== null && !(Number.isInteger(a) && a >= 0 && a < (questions[i]?.options.length ?? 0))))
+    if (answers.some((a, i) => a !== null && !(questions[i]?.type === "choice" && Number.isInteger(a) && a >= 0 && a < questions[i]!.options.length)))
       return c.json({ error: "Invalid answer" }, 400);
 
     const user = upsertUser(email);
@@ -181,7 +216,15 @@ export const teacherRoutes = new Hono<AppEnv>()
     if (!row) return c.json({ error: "Not found" }, 404);
     const r = results(row.run, row.task);
     const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
-    const header = ["email", "scanned_at", "qr_age_s", "login_delay_s", "flags", ...(r.questions.length ? ["score"] : []), ...r.questions.map((_, i) => `q${i + 1}`)];
+    const header = [
+      "email",
+      "scanned_at",
+      "qr_age_s",
+      "login_delay_s",
+      "flags",
+      ...(r.questions.length ? ["score"] : []),
+      ...r.questions.flatMap((q, i) => (q.askConfidence ? [`q${i + 1}`, `q${i + 1}_confidence`] : [`q${i + 1}`])),
+    ];
     const lines = r.students.map((s) =>
       [
         s.email,
@@ -190,7 +233,10 @@ export const teacherRoutes = new Hono<AppEnv>()
         ((s.completedAt - s.scannedAt) / 1000).toFixed(0),
         s.suspicion.join("; "),
         ...(r.questions.length ? [s.score] : []),
-        ...s.answers.map((a) => (a ? `${String.fromCharCode(65 + a.choice)}${a.disqualified ? " (DQ)" : ""}` : "")),
+        ...s.answers.flatMap((a, i) => {
+          const cell = !a ? "" : `${a.choice !== null ? String.fromCharCode(65 + a.choice) : (a.text ?? "")}${a.disqualified ? " (DQ)" : ""}`;
+          return r.questions[i]!.askConfidence ? [cell, a?.confidence ?? ""] : [cell];
+        }),
       ]
         .map(esc)
         .join(","),
@@ -241,8 +287,10 @@ function results(run: typeof schema.runs.$inferSelect, task: typeof schema.tasks
         ip: checkin.ip,
         paper: checkin.deviceId === PAPER,
         suspicion: [...new Set(suspicion.get(checkin.userId))],
-        score: mine.filter((a, i) => a && !a.disqualified && a.choice === questions[i]!.correctIndex).length,
-        answers: mine.map((a) => a && { choice: a.choice, disqualified: a.disqualified, reason: a.reason, flag: a.flag, ms: a.answeredAt - a.servedAt }),
+        score: questions.filter((q, i) => earnsPoint(q, mine[i])).length,
+        answers: mine.map(
+          (a) => a && { choice: a.choice, text: a.text, confidence: a.confidence, disqualified: a.disqualified, reason: a.reason, flag: a.flag, ms: a.answeredAt - a.servedAt },
+        ),
       };
     }),
   };
@@ -350,3 +398,41 @@ export const joinRoutes = new Hono<AppEnv>()
     checkin(c, c.get("user")!, runId!, Number(issuedAt), Number(scannedAt));
     return c.json({ runId, kind: row.task.kind, title: row.task.title });
   });
+
+// ---------------------------------------------------------------------------
+// Students: their own participation history
+// ---------------------------------------------------------------------------
+
+export const studentRoutes = new Hono<AppEnv>().use(requireUser).get("/history", (c) => {
+  const userId = c.get("user")!.id;
+  const rows = db
+    .select({ run: schema.runs, task: schema.tasks, checkin: schema.checkins })
+    .from(schema.checkins)
+    .innerJoin(schema.runs, eq(schema.runs.id, schema.checkins.runId))
+    .innerJoin(schema.tasks, eq(schema.tasks.id, schema.runs.taskId))
+    .where(eq(schema.checkins.userId, userId))
+    .orderBy(desc(schema.runs.startedAt))
+    .all();
+  const runIds = rows.map((r) => r.run.id);
+  const taskIds = [...new Set(rows.map((r) => r.task.id))];
+  const answers = runIds.length
+    ? db.select().from(schema.answers).where(and(inArray(schema.answers.runId, runIds), eq(schema.answers.userId, userId))).all()
+    : [];
+  const questions = taskIds.length ? db.select().from(schema.questions).where(inArray(schema.questions.taskId, taskIds)).all() : [];
+  return c.json(
+    rows.map(({ run, task, checkin }) => {
+      const mine = answers.filter((a) => a.runId === run.id);
+      return {
+        runId: run.id,
+        title: task.title,
+        kind: task.kind,
+        startedAt: run.startedAt,
+        checkedInAt: checkin.scannedAt,
+        questions: questions.filter((q) => q.taskId === task.id).length,
+        answered: mine.length,
+        notCounted: mine.filter((a) => a.disqualified).length,
+        typed: mine.filter((a) => a.text).length,
+      };
+    }),
+  );
+});

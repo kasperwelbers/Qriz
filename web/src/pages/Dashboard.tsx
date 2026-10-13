@@ -7,6 +7,55 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { api, type Run, type Task, useMe } from "@/lib/api";
 
+type HistoryItem = { runId: string; title: string; kind: "attendance" | "quiz"; startedAt: number; questions: number; answered: number; notCounted: number; typed: number };
+
+/** A student's own participation record: when they were there and how they took part, not a score. */
+function History() {
+  const [items, setItems] = useState<HistoryItem[] | null>(null);
+  useEffect(() => {
+    api<HistoryItem[]>("/me/history").then(setItems, () => setItems([]));
+  }, []);
+  if (!items?.length) return null;
+  const quizzes = items.filter((i) => i.kind === "quiz");
+  const answered = quizzes.reduce((n, i) => n + i.answered - i.notCounted, 0);
+  const asked = quizzes.reduce((n, i) => n + i.questions, 0);
+  return (
+    <div className="mt-8 grid gap-4">
+      <div>
+        <h2 className="text-xl font-semibold">Your participation</h2>
+        <p className="text-muted-foreground">
+          Present {items.length} {items.length === 1 ? "time" : "times"}
+          {asked > 0 && ` · answered ${answered} of ${asked} questions`}
+        </p>
+      </div>
+      <div className="divide-y rounded-lg border">
+        {items.map((i) => (
+          <div key={i.runId} className="flex flex-wrap items-center justify-between gap-2 p-3">
+            <div>
+              <p className="font-medium">{i.title}</p>
+              <p className="text-sm text-muted-foreground">{new Date(i.startedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="secondary">present</Badge>
+              {i.kind === "quiz" && (
+                <Badge variant="outline">
+                  answered {i.answered - i.notCounted}/{i.questions}
+                </Badge>
+              )}
+              {i.typed > 0 && <Badge variant="outline">wrote {i.typed} {i.typed === 1 ? "answer" : "answers"}</Badge>}
+              {i.notCounted > 0 && (
+                <Badge variant="outline" className="border-amber-300 text-amber-800">
+                  {i.notCounted} not counted
+                </Badge>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const me = useMe();
   const navigate = useNavigate();
@@ -29,6 +78,7 @@ export default function Dashboard() {
             <CardDescription>Scan the QR code on the screen in class to check in or join a quiz. You stay logged in on this device.</CardDescription>
           </CardHeader>
         </Card>
+        <History />
       </Shell>
     );
 

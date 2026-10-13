@@ -33,6 +33,20 @@ export function useMe() {
 
 export const letter = (i: number) => String.fromCharCode(65 + i);
 
-export type Question = { id?: string; prompt: string; options: string[]; correctIndex: number | null; timeLimitSec: number };
+export type Question = {
+  id?: string;
+  type: "choice" | "open";
+  prompt: string;
+  options: string[];
+  /** Null: a poll, no right answer. */
+  correctIndex: number | null;
+  scoring: "correct" | "attempt";
+  askConfidence: boolean;
+  timeLimitSec: number;
+};
+
+export type CheckAction = "disqualify" | "warn" | "record";
+export type Checks = { leftPage: CheckAction; splitScreen: CheckAction; connectionLost: CheckAction };
+export const defaultChecks: Checks = { leftPage: "disqualify", splitScreen: "disqualify", connectionLost: "record" };
 export type Run = { id: string; taskId: string; startedAt: number; endedAt: number | null };
 export type Task = { id: string; title: string; kind: "attendance" | "quiz"; createdAt: number; runs: Run[] };

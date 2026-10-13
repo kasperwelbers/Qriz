@@ -12,15 +12,26 @@ export type LiveState = {
   timeLimitSec: number;
   optionCount: number;
   questionId: string | null;
+  qType: "choice" | "open";
+  askConfidence: boolean;
   correctIndex: number | null;
   // student only: options in this student's own order, with their original index
   choices?: { index: number; text: string }[];
   myAnswer?: number | null;
+  myText?: string | null;
+  answered?: boolean;
   disqualified?: boolean;
+  /** Checks that fired for this student and are set to "warn": the answer counts, but the teacher sees it. */
+  warnings?: string[];
+  splitScreenBlocks?: boolean;
   // presenter only
   prompt?: string | null;
   options?: string[];
   counts?: number[];
+  /** Average confidence per option, when the question asks for it. */
+  confidence?: (number | null)[] | null;
+  showResponses?: boolean;
+  responses?: string[];
   answeredCount?: number;
   disqualifiedCount?: number;
   checkinCount?: number;

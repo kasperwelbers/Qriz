@@ -40,6 +40,8 @@ export const tasks = sqliteTable("tasks", {
   ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   kind: text("kind", { enum: ["attendance", "quiz"] }).notNull(),
+  /** What happens when an anti-cheat check fires, per check. Missing keys use the defaults in checks.ts. */
+  checks: text("checks", { mode: "json" }).$type<Partial<Record<string, string>>>().notNull().default(sql`'{}'`),
   createdAt: integer("created_at").notNull().default(now),
 });
 
@@ -49,9 +51,16 @@ export const questions = sqliteTable(
     id: text("id").primaryKey(),
     taskId: text("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
     position: integer("position").notNull(),
+    /** "choice": pick an option. "open": type a short text, e.g. a question about the reading. */
+    type: text("type", { enum: ["choice", "open"] }).notNull().default("choice"),
     prompt: text("prompt").notNull(),
     options: text("options", { mode: "json" }).$type<string[]>().notNull(),
+    /** Null for a poll: no right answer. */
     correctIndex: integer("correct_index"),
+    /** "correct": a point for the right answer. "attempt": a point for any answer given in time. */
+    scoring: text("scoring", { enum: ["correct", "attempt"] }).notNull().default("correct"),
+    /** Ask students how sure they are after picking an option. */
+    askConfidence: integer("ask_confidence", { mode: "boolean" }).notNull().default(false),
     timeLimitSec: integer("time_limit_sec").notNull().default(30),
   },
   (t) => [index("questions_task_idx").on(t.taskId)],
@@ -92,12 +101,17 @@ export const answers = sqliteTable(
     runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
     questionId: text("question_id").notNull().references(() => questions.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    choice: integer("choice").notNull(),
+    /** Index of the picked option; null for open questions. */
+    choice: integer("choice"),
+    /** Typed answer to an open question. */
+    text: text("text"),
+    /** How sure the student was, 0-100, when the question asked for it. */
+    confidence: integer("confidence"),
     servedAt: integer("served_at").notNull(),
     answeredAt: integer("answered_at").notNull(),
     disqualified: integer("disqualified", { mode: "boolean" }).notNull().default(false),
     reason: text("reason"),
-    /** A suspicious event that does not disqualify, e.g. the connection dropped mid-question. */
+    /** Suspicious events that did not disqualify, e.g. the connection dropped mid-question. Joined with "; ". */
     flag: text("flag"),
   },
   (t) => [uniqueIndex("answers_run_q_user_idx").on(t.runId, t.questionId, t.userId)],

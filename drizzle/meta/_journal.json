@@ -22,6 +22,13 @@
       "when": 1791842522258,
       "tag": "0002_user_name",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791876395695,
+      "tag": "0003_participation",
+      "breakpoints": true
     }
   ]
 }

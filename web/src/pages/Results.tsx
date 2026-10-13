@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { api, letter, type Question, useMe } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type Answer = { choice: number; disqualified: boolean; reason: string | null; flag: string | null; ms: number } | null;
+type Answer = { choice: number | null; text: string | null; confidence: number | null; disqualified: boolean; reason: string | null; flag: string | null; ms: number } | null;
 type Results = {
   task: { title: string; kind: string };
   run: { startedAt: number; endedAt: number | null };
@@ -65,7 +65,7 @@ export default function Results() {
             <tr>
               <th className="p-3 font-medium">Student</th>
               <th className="p-3 font-medium">Checked in</th>
-              {data.questions.length > 0 && <th className="p-3 font-medium">Score</th>}
+              {data.questions.length > 0 && <th className="p-3 font-medium">Points</th>}
               {data.questions.map((_, i) => (
                 <th key={i} className="p-3 text-center font-medium">
                   Q{i + 1}
@@ -95,21 +95,27 @@ export default function Results() {
                     {s.score}/{data.questions.length}
                   </td>
                 )}
-                {s.answers.map((a, i) => (
-                  <td
-                    key={i}
-                    title={a ? `${(a.ms / 1000).toFixed(1)} s${a.reason ? ` · ${a.reason}` : ""}${a.flag ? ` · ${a.flag}` : ""}` : "No answer"}
-                    className={cn(
-                      "p-3 text-center font-medium",
-                      a && !a.disqualified && a.choice === data.questions[i]!.correctIndex && "text-green-600",
-                      a && !a.disqualified && a.choice !== data.questions[i]!.correctIndex && "text-red-600",
-                      a?.disqualified && "text-muted-foreground line-through",
-                    )}
-                  >
-                    {a ? letter(a.choice) : "–"}
-                    {a?.flag && <span className="text-amber-600">*</span>}
-                  </td>
-                ))}
+                {s.answers.map((a, i) => {
+                  const q = data.questions[i]!;
+                  // Only color right/wrong where being right is what earns the point.
+                  const judged = a && !a.disqualified && q.type === "choice" && q.correctIndex !== null && q.scoring === "correct";
+                  return (
+                    <td
+                      key={i}
+                      title={a ? [`${(a.ms / 1000).toFixed(1)} s`, a.text, a.confidence !== null && `${a.confidence}% sure`, a.reason, a.flag].filter(Boolean).join(" · ") : "No answer"}
+                      className={cn(
+                        "p-3 text-center font-medium",
+                        judged && a.choice === q.correctIndex && "text-green-600",
+                        judged && a.choice !== q.correctIndex && "text-red-600",
+                        a?.disqualified && "text-muted-foreground line-through",
+                      )}
+                    >
+                      {!a ? "–" : a.choice !== null ? letter(a.choice) : <span className="inline-block max-w-40 truncate align-bottom font-normal">{a.text}</span>}
+                      {a?.confidence != null && <span className="ml-1 text-xs font-normal text-muted-foreground">{a.confidence}%</span>}
+                      {a?.flag && <span className="text-amber-600">*</span>}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -158,6 +164,7 @@ function PaperEntry({ runId, questions, onSaved }: { runId: string; questions: Q
               <div key={i} className="grid gap-1.5">
                 <Label>Q{i + 1}</Label>
                 <div className="flex gap-1">
+                  {q.type === "open" && <span className="flex h-9 items-center text-sm text-muted-foreground">open</span>}
                   {q.options.map((_, oi) => (
                     <button
                       type="button"

@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { WSContext } from "hono/ws";
 import type { User } from "./auth.ts";
+import { type Check, CHECKS, type CheckSettings, checkSettings } from "./checks.ts";
 import { config } from "./config.ts";
 import { randomId, sha256 } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
@@ -26,15 +27,16 @@ class LiveRun {
   paperRound = false;
   /** Show checked-in students' names in the lobby, so the class can see who is "present". */
   showNames = true;
+  /** Show the typed answers to an open question on the projector (off until the teacher chooses to). */
+  showResponses = false;
   qIndex = -1;
   servedAt = 0;
   deadline = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private conns = new Set<Conn>();
-  /** Users who left the page during the current question: their answer is disqualified. */
-  private focusLost = new Map<string, string>();
-  /** Users whose connection dropped during the current question: flagged, not disqualified (could be bad wifi). */
-  private connectionLost = new Set<string>();
+  /** Checks that fired per user during the current question. What that means is up to the task's check settings. */
+  private events = new Map<string, Set<Check>>();
+  readonly checks: CheckSettings;
 
   constructor(
     readonly runId: string,
@@ -43,6 +45,7 @@ class LiveRun {
     ended: boolean,
   ) {
     if (ended) this.phase = "ended";
+    this.checks = checkSettings(task.checks);
   }
 
   get current(): Question | undefined {
@@ -56,15 +59,15 @@ class LiveRun {
 
   leave(conn: Conn) {
     this.conns.delete(conn);
-    if (conn.role === "student" && this.phase === "question") this.markConnectionLost(conn.user.id);
+    if (conn.role === "student" && this.phase === "question") this.checkFired(conn.user.id, "connectionLost");
   }
 
   next() {
     if (this.phase === "ended" || this.qIndex >= this.questions.length - 1) return false;
     this.qIndex++;
     this.phase = "question";
-    this.focusLost.clear();
-    this.connectionLost.clear();
+    this.showResponses = false;
+    this.events.clear();
     this.servedAt = Date.now();
     this.deadline = this.servedAt + this.current!.timeLimitSec * 1000;
     this.clearTimer();
@@ -77,7 +80,7 @@ class LiveRun {
   endQuestion() {
     if (this.phase !== "question") return;
     this.clearTimer();
-    if (!this.paperRound) return this.close();
+    if (!this.paperRound || this.current?.type === "open") return this.close();
     this.phase = "paper";
     this.deadline = Date.now() + config.paperSeconds * 1000;
     this.timer = setTimeout(() => this.close(), config.paperSeconds * 1000);
@@ -93,6 +96,11 @@ class LiveRun {
 
   setShowNames(on: boolean) {
     this.showNames = on;
+    this.broadcast("presenter");
+  }
+
+  setShowResponses(on: boolean) {
+    this.showResponses = on;
     this.broadcast("presenter");
   }
 
@@ -123,32 +131,57 @@ class LiveRun {
 
   private handleMessageUnsafe(conn: Conn, raw: string) {
     if (conn.role !== "student") return;
-    let msg: { type?: string; questionId?: string; choice?: number; state?: string; reason?: string };
+    let msg: { type?: string; questionId?: string; choice?: number; text?: string; confidence?: number; state?: string; reason?: string };
     try {
       msg = JSON.parse(raw);
     } catch {
       return;
     }
     if (msg.type === "focus" && msg.state === "hidden" && this.phase === "question") {
-      this.markFocusLost(conn.user.id, msg.reason === "split screen" ? "split screen" : "left the page");
+      this.checkFired(conn.user.id, msg.reason === "split screen" ? "splitScreen" : "leftPage");
     } else if (msg.type === "answer") {
-      const error = this.answer(conn.user, String(msg.questionId), Number(msg.choice));
+      const error = this.answer(conn.user, String(msg.questionId), msg);
       if (error) conn.ws.send(JSON.stringify({ type: "error", error }));
     }
   }
 
-  private answer(user: User, questionId: string, choice: number): string | null {
+  private answer(user: User, questionId: string, msg: { choice?: number; text?: string; confidence?: number }): string | null {
     const q = this.current;
     const now = Date.now();
     if (this.phase !== "question" || !q || q.id !== questionId) return "This question is closed";
     if (now > this.deadline + config.answerGraceMs) return "Time is up";
-    if (!Number.isInteger(choice) || choice < 0 || choice >= q.options.length) return "Invalid answer";
+    let choice: number | null = null;
+    let text: string | null = null;
+    let confidence: number | null = null;
+    if (q.type === "open") {
+      text = String(msg.text ?? "").trim().slice(0, 500);
+      if (!text) return "Type an answer first";
+    } else {
+      choice = Number(msg.choice);
+      if (!Number.isInteger(choice) || choice < 0 || choice >= q.options.length) return "Invalid answer";
+      if (q.askConfidence && msg.confidence !== undefined) confidence = Math.max(0, Math.min(100, Math.round(Number(msg.confidence)) || 0));
+    }
     if (!isCheckedIn(this.runId, user.id)) return "Scan the QR code to join first";
 
-    const reason = this.focusLost.get(user.id) ?? null;
+    const fired = [...(this.events.get(user.id) ?? [])];
+    const dq = fired.find((c) => this.checks[c] === "disqualify");
+    const flags = fired.filter((c) => this.checks[c] !== "disqualify").map((c) => CHECKS[c].label);
     const inserted = db
       .insert(schema.answers)
-      .values({ id: randomId(), runId: this.runId, questionId, userId: user.id, choice, servedAt: this.servedAt, answeredAt: now, disqualified: reason !== null, reason, flag: this.connectionLost.has(user.id) ? "connection lost" : null })
+      .values({
+        id: randomId(),
+        runId: this.runId,
+        questionId,
+        userId: user.id,
+        choice,
+        text,
+        confidence,
+        servedAt: this.servedAt,
+        answeredAt: now,
+        disqualified: dq !== undefined,
+        reason: dq ? CHECKS[dq].label : null,
+        flag: flags.length ? flags.join("; ") : null,
+      })
       .onConflictDoNothing()
       .returning()
       .get();
@@ -157,29 +190,29 @@ class LiveRun {
     return null;
   }
 
-  private markFocusLost(userId: string, reason: string) {
-    if (this.focusLost.has(userId)) return;
-    this.focusLost.set(userId, reason);
+  /** A check fired for this user during the current question; the task's settings decide what it does to their answer. */
+  private checkFired(userId: string, check: Check) {
+    const fired = this.events.get(userId) ?? new Set<Check>();
+    if (fired.has(check)) return;
+    fired.add(check);
+    this.events.set(userId, fired);
     const q = this.current;
-    if (q) {
-      db.update(schema.answers)
-        .set({ disqualified: true, reason })
-        .where(and(eq(schema.answers.runId, this.runId), eq(schema.answers.questionId, q.id), eq(schema.answers.userId, userId)))
-        .run();
+    const where = q && and(eq(schema.answers.runId, this.runId), eq(schema.answers.questionId, q.id), eq(schema.answers.userId, userId));
+    const existing = where && db.select().from(schema.answers).where(where).get();
+    if (existing) {
+      const label = CHECKS[check].label;
+      if (this.checks[check] === "disqualify") {
+        if (!existing.disqualified) db.update(schema.answers).set({ disqualified: true, reason: label }).where(where).run();
+      } else {
+        db.update(schema.answers).set({ flag: existing.flag ? `${existing.flag}; ${label}` : label }).where(where).run();
+      }
     }
-    this.broadcast();
+    // A recorded check is silent: nothing changes on any screen.
+    if (this.checks[check] !== "record") this.broadcast();
   }
 
-  private markConnectionLost(userId: string) {
-    if (this.connectionLost.has(userId)) return;
-    this.connectionLost.add(userId);
-    const q = this.current;
-    if (q) {
-      db.update(schema.answers)
-        .set({ flag: "connection lost" })
-        .where(and(eq(schema.answers.runId, this.runId), eq(schema.answers.questionId, q.id), eq(schema.answers.userId, userId)))
-        .run();
-    }
+  private disqualifiedBy(userId: string): boolean {
+    return [...(this.events.get(userId) ?? [])].some((c) => this.checks[c] === "disqualify");
   }
 
   private clearTimer() {
@@ -213,6 +246,8 @@ class LiveRun {
       timeLimitSec: q?.timeLimitSec ?? 0,
       optionCount: q?.options.length ?? 0,
       questionId: q?.id ?? null,
+      qType: q?.type ?? "choice",
+      askConfidence: q?.askConfidence ?? false,
     };
 
     if (conn.role === "student") {
@@ -230,7 +265,12 @@ class LiveRun {
           ...base,
           choices: q ? shuffledOptions(q, conn.user.id) : [],
           myAnswer: mine?.choice ?? null,
-          disqualified: mine?.disqualified || this.focusLost.has(conn.user.id),
+          myText: mine?.text ?? null,
+          answered: !!mine,
+          disqualified: mine?.disqualified || this.disqualifiedBy(conn.user.id),
+          warnings: [...(this.events.get(conn.user.id) ?? [])].filter((c) => this.checks[c] === "warn").map((c) => CHECKS[c].label),
+          // The client only blocks the buttons in split screen when split screen would disqualify anyway.
+          splitScreenBlocks: this.checks.splitScreen === "disqualify",
           correctIndex: this.phase === "closed" ? (q?.correctIndex ?? null) : null,
         }),
       );
@@ -244,7 +284,13 @@ class LiveRun {
           .where(and(eq(schema.answers.runId, this.runId), eq(schema.answers.questionId, q.id)))
           .all()
       : [];
-    const counts = (q?.options ?? []).map((_, i) => answers.filter((a) => a.choice === i && !a.disqualified).length);
+    const valid = answers.filter((a) => !a.disqualified);
+    const counts = (q?.options ?? []).map((_, i) => valid.filter((a) => a.choice === i).length);
+    // Average confidence per option, so the class can discuss "we were all sure, and all wrong".
+    const confidence = (q?.options ?? []).map((_, i) => {
+      const cs = valid.filter((a) => a.choice === i && a.confidence !== null).map((a) => a.confidence!);
+      return cs.length ? Math.round(cs.reduce((x, y) => x + y, 0) / cs.length) : null;
+    });
     const checkedIn = db
       .select({ name: schema.users.name })
       .from(schema.checkins)
@@ -262,8 +308,13 @@ class LiveRun {
         paperRound: this.paperRound,
         correctIndex: this.phase === "closed" ? (q?.correctIndex ?? null) : null,
         counts,
+        confidence: q?.askConfidence ? confidence : null,
+        showResponses: this.showResponses,
+        // Typed answers are anonymous on the projector, and only shown after the question closes and the teacher chooses to.
+        responses: q?.type === "open" && this.phase === "closed" && this.showResponses ? valid.map((a) => a.text ?? "") : [],
         answeredCount: answers.length,
-        disqualifiedCount: answers.filter((a) => a.disqualified).length + [...this.focusLost.keys()].filter((u) => !answers.some((a) => a.userId === u)).length,
+        disqualifiedCount:
+          answers.filter((a) => a.disqualified).length + [...this.events.keys()].filter((u) => this.disqualifiedBy(u) && !answers.some((a) => a.userId === u)).length,
         checkinCount,
         showNames: this.showNames,
         names: this.showNames ? checkedIn.map((c) => c.name ?? "(no name yet)") : [],

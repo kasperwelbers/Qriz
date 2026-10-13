@@ -47,7 +47,7 @@ export default function Present() {
   if (me === null) return <Navigate to="/login" replace />;
   if (!state) return <div className="flex min-h-dvh items-center justify-center text-muted-foreground">{connected ? "Loading…" : "Connecting…"}</div>;
 
-  const action = (a: "next" | "close" | "end" | "paper-on" | "paper-off" | "names-on" | "names-off") => api(`/teacher/runs/${runId}/${a}`, { method: "POST" }).catch((e) => alert(e.message));
+  const action = (a: "next" | "close" | "end" | "paper-on" | "paper-off" | "names-on" | "names-off" | "responses-on" | "responses-off") => api(`/teacher/runs/${runId}/${a}`, { method: "POST" }).catch((e) => alert(e.message));
   const lobby = state.phase === "lobby" || state.kind === "attendance";
   const qrVisible = lobby || showQr;
   const isLast = state.qIndex >= state.total - 1;
@@ -121,7 +121,9 @@ export default function Present() {
                   </span>
                 </div>
                 <p className="text-4xl leading-tight font-semibold whitespace-pre-wrap">{state.prompt}</p>
-                {state.phase === "question" && <p className="text-2xl text-white/60">Choose your answer on your phone.</p>}
+                {state.phase === "question" && (
+                  <p className="text-2xl text-white/60">{state.qType === "open" ? "Type your answer on your phone." : "Choose your answer on your phone."}</p>
+                )}
                 {state.phase === "paper" && (
                   <p className="rounded-lg bg-amber-400/15 px-4 py-2 text-xl text-amber-200">Phones are locked. On paper? Write down the letter of your answer.</p>
                 )}
@@ -141,14 +143,35 @@ export default function Present() {
                         {reveal && <div className="absolute inset-y-0 left-0 bg-white/10" style={{ width: `${pct}%` }} />}
                         <span className="relative flex size-12 shrink-0 items-center justify-center rounded-lg bg-white text-2xl font-bold text-neutral-950">{letter(i)}</span>
                         <span className="relative">{o}</span>
-                        {reveal && <span className="relative ml-auto text-lg text-white/70">{state.counts?.[i] ?? 0}</span>}
+                        {reveal && (
+                          <span className="relative ml-auto text-right text-lg text-white/70">
+                            {state.counts?.[i] ?? 0}
+                            {state.confidence?.[i] != null && <span className="block text-sm text-white/50">{state.confidence[i]}% sure</span>}
+                          </span>
+                        )}
                       </div>
                     );
                   })}
                 </div>
+                {state.qType === "open" && state.phase === "closed" && (
+                  <div className="grid gap-4">
+                    <Button variant="secondary" className="w-fit" onClick={() => action(state.showResponses ? "responses-off" : "responses-on")}>
+                      {state.showResponses ? <EyeOff /> : <Eye />} {state.showResponses ? "Hide answers" : "Show answers"}
+                    </Button>
+                    {state.showResponses && (
+                      <div className="grid max-h-[50vh] gap-3 overflow-y-auto sm:grid-cols-2">
+                        {state.responses?.map((r, i) => (
+                          <p key={i} className="rounded-xl bg-white/10 p-4 text-xl whitespace-pre-wrap">
+                            {r}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <p className="text-white/60">
                   {state.answeredCount} answered
-                  {state.disqualifiedCount ? ` · ${state.disqualifiedCount} left the app` : ""} · {state.connectedStudents} connected
+                  {state.disqualifiedCount ? ` · ${state.disqualifiedCount} not counted` : ""} · {state.connectedStudents} connected
                 </p>
               </div>
             )}
