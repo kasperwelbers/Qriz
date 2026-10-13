@@ -1,13 +1,25 @@
-import { ClipboardCheck, ListChecks, Play, Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { BookOpen, Plus, Users } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 import { Shell } from "@/components/Shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { api, type Run, type Task, useMe } from "@/lib/api";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { api, type CourseSummary, useMe } from "@/lib/api";
 
-type HistoryItem = { runId: string; title: string; kind: "attendance" | "quiz"; startedAt: number; questions: number; answered: number; notCounted: number; typed: number };
+type HistoryItem = {
+  runId: string;
+  title: string;
+  course: string;
+  kind: "attendance" | "quiz";
+  startedAt: number;
+  questions: number;
+  answered: number;
+  notCounted: number;
+  typed: number;
+  canReview: boolean;
+};
 
 /** A student's own participation record: when they were there and how they took part, not a score. */
 function History() {
@@ -33,9 +45,11 @@ function History() {
           <div key={i.runId} className="flex flex-wrap items-center justify-between gap-2 p-3">
             <div>
               <p className="font-medium">{i.title}</p>
-              <p className="text-sm text-muted-foreground">{new Date(i.startedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</p>
+              <p className="text-sm text-muted-foreground">
+                {i.course} · {new Date(i.startedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+              </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary">present</Badge>
               {i.kind === "quiz" && (
                 <Badge variant="outline">
@@ -48,6 +62,11 @@ function History() {
                   {i.notCounted} not counted
                 </Badge>
               )}
+              {i.canReview && (
+                <Button size="sm" variant="outline" asChild>
+                  <Link to={`/review/${i.runId}`}>Review & practice</Link>
+                </Button>
+              )}
             </div>
           </div>
         ))}
@@ -59,11 +78,12 @@ function History() {
 export default function Dashboard() {
   const me = useMe();
   const navigate = useNavigate();
-  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [courses, setCourses] = useState<CourseSummary[] | null>(null);
+  const [newTitle, setNewTitle] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (me?.role === "teacher") api<Task[]>("/teacher/tasks").then(setTasks);
+    if (me?.role === "teacher") api<CourseSummary[]>("/teacher/courses").then(setCourses);
   }, [me]);
 
   if (me === undefined) return null;
@@ -82,10 +102,11 @@ export default function Dashboard() {
       </Shell>
     );
 
-  async function start(task: Task) {
+  async function create(e: FormEvent) {
+    e.preventDefault();
     try {
-      const run = await api<Run>(`/teacher/tasks/${task.id}/runs`, { method: "POST" });
-      navigate(`/present/${run.id}`);
+      const course = await api<{ id: string }>("/teacher/courses", { body: { title: newTitle } });
+      navigate(`/courses/${course.id}`);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -94,50 +115,46 @@ export default function Dashboard() {
   return (
     <Shell me={me}>
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Your tasks</h1>
-        <Button asChild>
-          <Link to="/tasks/new">
-            <Plus /> New task
-          </Link>
-        </Button>
+        <h1 className="text-2xl font-semibold">Your courses</h1>
+        {newTitle === null && (
+          <Button onClick={() => setNewTitle("")}>
+            <Plus /> New course
+          </Button>
+        )}
       </div>
+      {newTitle !== null && (
+        <form onSubmit={create} className="mb-6 flex gap-2">
+          <Input autoFocus value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Course title, e.g. Communication Science 1" />
+          <Button type="submit">Create</Button>
+          <Button type="button" variant="ghost" onClick={() => setNewTitle(null)}>
+            Cancel
+          </Button>
+        </form>
+      )}
       {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
-      <div className="grid gap-4">
-        {tasks?.length === 0 && <p className="text-muted-foreground">No tasks yet. Create an attendance check or a quiz to get started.</p>}
-        {tasks?.map((t) => (
-          <Card key={t.id} className="gap-4">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div className="grid gap-1.5">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {courses?.length === 0 && <p className="text-muted-foreground">No courses yet. A course holds your check-ins and quizzes for one class.</p>}
+        {courses?.map((c) => (
+          <Link key={c.id} to={`/courses/${c.id}`}>
+            <Card className="h-full transition-colors hover:bg-muted/50">
+              <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  {t.kind === "quiz" ? <ListChecks className="size-4" /> : <ClipboardCheck className="size-4" />}
-                  {t.title}
+                  <BookOpen className="size-4" /> {c.title}
                 </CardTitle>
-                <CardDescription>{t.kind === "quiz" ? "Quiz" : "Attendance"}</CardDescription>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" asChild>
-                  <Link to={`/tasks/${t.id}`}>Edit</Link>
-                </Button>
-                <Button size="sm" onClick={() => start(t)}>
-                  <Play /> Start
-                </Button>
-              </div>
-            </CardHeader>
-            {t.runs.length > 0 && (
-              <CardContent className="flex flex-wrap gap-2">
-                {t.runs.map((r) => (
-                  <Link key={r.id} to={r.endedAt ? `/results/${r.id}` : `/present/${r.id}`}>
-                    <Badge variant={r.endedAt ? "secondary" : "default"}>
-                      {new Date(r.startedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
-                      {!r.endedAt && " · live"}
-                    </Badge>
-                  </Link>
-                ))}
-              </CardContent>
-            )}
-          </Card>
+                <CardDescription className="flex items-center gap-2">
+                  {c.taskCount} {c.taskCount === 1 ? "task" : "tasks"}
+                  {c.shared && (
+                    <span className="flex items-center gap-1">
+                      · <Users className="size-3.5" /> shared with you
+                    </span>
+                  )}
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          </Link>
         ))}
       </div>
+      <History />
     </Shell>
   );
 }

@@ -29,6 +29,13 @@
       "when": 1791876395695,
       "tag": "0003_participation",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791900519789,
+      "tag": "0004_courses",
+      "breakpoints": true
     }
   ]
 }

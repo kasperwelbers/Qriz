@@ -35,13 +35,31 @@ export const sessions = sqliteTable(
   (t) => [index("sessions_user_idx").on(t.userId)],
 );
 
-export const tasks = sqliteTable("tasks", {
+/** A course groups tasks and holds the defaults they share. */
+export const courses = sqliteTable("courses", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  /** Emails of co-teachers who can manage this course (they need a teacher account too). */
+  teachers: text("teachers", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+  /** Defaults for its tasks: review policy and check settings. */
+  defaults: text("defaults", { mode: "json" }).$type<CourseDefaults>().notNull().default(sql`'{}'`),
+  createdAt: integer("created_at").notNull().default(now),
+});
+
+export type CourseDefaults = { review?: "never" | "after-session"; checks?: Partial<Record<string, string>> };
+
+export const tasks = sqliteTable("tasks", {
+  id: text("id").primaryKey(),
+  courseId: text("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+  ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  position: integer("position").notNull().default(0),
   title: text("title").notNull(),
   kind: text("kind", { enum: ["attendance", "quiz"] }).notNull(),
   /** What happens when an anti-cheat check fires, per check. Missing keys use the defaults in checks.ts. */
   checks: text("checks", { mode: "json" }).$type<Partial<Record<string, string>>>().notNull().default(sql`'{}'`),
+  /** Whether students may revisit their answers after the session. Null: use the course default. */
+  review: text("review", { enum: ["never", "after-session"] }),
   createdAt: integer("created_at").notNull().default(now),
 });
 
@@ -66,10 +84,14 @@ export const questions = sqliteTable(
   (t) => [index("questions_task_idx").on(t.taskId)],
 );
 
+export type RunQuestion = typeof questions.$inferSelect;
+
 /** One occurrence of a task in class. */
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+  /** The questions as they were when the run started, so editing a task never changes past results. */
+  questions: text("questions", { mode: "json" }).$type<RunQuestion[]>().notNull().default(sql`'[]'`),
   startedAt: integer("started_at").notNull().default(now),
   endedAt: integer("ended_at"),
 });
@@ -99,7 +121,8 @@ export const answers = sqliteTable(
   {
     id: text("id").primaryKey(),
     runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
-    questionId: text("question_id").notNull().references(() => questions.id, { onDelete: "cascade" }),
+    /** Id within the run's question snapshot; the question itself may since have been edited or removed. */
+    questionId: text("question_id").notNull(),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     /** Index of the picked option; null for open questions. */
     choice: integer("choice"),

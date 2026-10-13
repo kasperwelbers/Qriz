@@ -12,7 +12,7 @@
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
     "types": ["bun"],
-    "paths": { "@/*": ["./web/src/*"] }
+    "paths": { "@/*": ["./web/src/*"], "@shared/*": ["./shared/*"] }
   },
-  "include": ["server", "web/src", "vite.config.ts", "drizzle.config.ts"]
+  "include": ["server", "shared", "web/src", "vite.config.ts", "drizzle.config.ts"]
 }

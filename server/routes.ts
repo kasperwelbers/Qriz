@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Context } from "hono";
 import { type AppEnv, deviceId, emailAllowed, requireTeacher, requireUser, upsertUser, type User } from "./auth.ts";
-import { checkSettings } from "./checks.ts";
+import { canManage, questionsOf, taskFor } from "./courses.ts";
 import { config } from "./config.ts";
 import { randomId, seal, unseal } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
@@ -14,82 +14,32 @@ const SHARED_DEVICE = "same phone as another student";
 /** Device id used for students whose answers the teacher entered from paper. */
 const PAPER = "paper";
 
-type QuestionInput = {
-  id?: string;
-  type?: "choice" | "open";
-  prompt: string;
-  options: string[];
-  correctIndex: number | null;
-  scoring?: "correct" | "attempt";
-  askConfidence?: boolean;
-  timeLimitSec: number;
-};
-type TaskInput = { title: string; kind: "attendance" | "quiz"; checks?: Record<string, string>; questions?: QuestionInput[] };
-type QuestionRow = typeof schema.questions.$inferSelect;
+type RunQuestion = schema.RunQuestion;
 type AnswerRow = typeof schema.answers.$inferSelect;
 
 /** One point per question: for the right answer, or for any answer when the question counts attempts (polls and open questions always do). */
-function earnsPoint(q: QuestionRow, a: AnswerRow | null | undefined): boolean {
+function earnsPoint(q: RunQuestion, a: AnswerRow | null | undefined): boolean {
   if (!a || a.disqualified) return false;
   if (q.type === "open" || q.scoring === "attempt" || q.correctIndex === null) return true;
   return a.choice === q.correctIndex;
 }
 
-function validateTask(body: TaskInput): string | null {
-  if (!body.title?.trim()) return "Title is required";
-  if (body.kind !== "attendance" && body.kind !== "quiz") return "Invalid kind";
-  for (const q of body.questions ?? []) {
-    if (!q.prompt?.trim()) return "Every question needs a prompt";
-    if (q.type === "open") continue;
-    if (!Array.isArray(q.options) || q.options.length < 2 || q.options.length > 6) return "Questions need 2 to 6 options";
-    if (q.correctIndex !== null && (q.correctIndex < 0 || q.correctIndex >= q.options.length)) return "Invalid correct answer";
-  }
-  for (const q of body.questions ?? []) if (!(q.timeLimitSec >= 5 && q.timeLimitSec <= 600)) return "Time limit must be 5 to 600 seconds";
-  return null;
-}
-
-function saveQuestions(taskId: string, input: QuestionInput[]) {
-  const existing = db.select({ id: schema.questions.id }).from(schema.questions).where(eq(schema.questions.taskId, taskId)).all();
-  const keep = new Set(input.map((q) => q.id).filter(Boolean));
-  const removed = existing.map((q) => q.id).filter((id) => !keep.has(id));
-  if (removed.length) db.delete(schema.questions).where(inArray(schema.questions.id, removed)).run();
-  input.forEach((q, position) => {
-    const open = q.type === "open";
-    const values = {
-      type: open ? ("open" as const) : ("choice" as const),
-      prompt: q.prompt.trim(),
-      options: open ? [] : q.options.map((o) => o.trim()),
-      correctIndex: open ? null : q.correctIndex,
-      scoring: open || q.correctIndex === null || q.scoring === "attempt" ? ("attempt" as const) : ("correct" as const),
-      askConfidence: !open && !!q.askConfidence,
-      timeLimitSec: Math.round(q.timeLimitSec),
-      position,
-    };
-    if (q.id && existing.some((e) => e.id === q.id)) db.update(schema.questions).set(values).where(eq(schema.questions.id, q.id)).run();
-    else db.insert(schema.questions).values({ id: randomId(), taskId, ...values }).run();
-  });
-}
-
-function ownedTask(c: Context<AppEnv>, taskId: string) {
-  return db
-    .select()
-    .from(schema.tasks)
-    .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.ownerId, c.get("user")!.id)))
-    .get();
-}
-
+/** A run the current teacher may manage, through its task's course. */
 function ownedRun(c: Context<AppEnv>, runId: string) {
   const row = db
-    .select({ run: schema.runs, task: schema.tasks })
+    .select({ run: schema.runs, task: schema.tasks, course: schema.courses })
     .from(schema.runs)
     .innerJoin(schema.tasks, eq(schema.tasks.id, schema.runs.taskId))
-    .where(and(eq(schema.runs.id, runId), eq(schema.tasks.ownerId, c.get("user")!.id)))
+    .innerJoin(schema.courses, eq(schema.courses.id, schema.tasks.courseId))
+    .where(eq(schema.runs.id, runId))
     .get();
-  return row ?? null;
+  return row && canManage(c.get("user")!, row.course) ? row : null;
 }
 
-const getQuestions = (taskId: string) =>
-  db.select().from(schema.questions).where(eq(schema.questions.taskId, taskId)).orderBy(asc(schema.questions.position)).all();
+/** Whether students may revisit this task after the session: the task's own setting, else the course default, else never. */
+export function reviewAllowed(task: typeof schema.tasks.$inferSelect, course: typeof schema.courses.$inferSelect): boolean {
+  return (task.review ?? course.defaults.review ?? "never") === "after-session";
+}
 
 // ---------------------------------------------------------------------------
 // Teacher: tasks and runs
@@ -98,57 +48,14 @@ const getQuestions = (taskId: string) =>
 export const teacherRoutes = new Hono<AppEnv>()
   .use(requireTeacher)
 
-  .get("/tasks", (c) => {
-    const tasks = db.select().from(schema.tasks).where(eq(schema.tasks.ownerId, c.get("user")!.id)).orderBy(desc(schema.tasks.createdAt)).all();
-    const runs = tasks.length
-      ? db.select().from(schema.runs).where(inArray(schema.runs.taskId, tasks.map((t) => t.id))).orderBy(desc(schema.runs.startedAt)).all()
-      : [];
-    return c.json(tasks.map((t) => ({ ...t, runs: runs.filter((r) => r.taskId === t.id) })));
-  })
-
-  .post("/tasks", async (c) => {
-    const body = await c.req.json<TaskInput>();
-    const error = validateTask(body);
-    if (error) return c.json({ error }, 400);
-    const task = db
-      .insert(schema.tasks)
-      .values({ id: randomId(), ownerId: c.get("user")!.id, title: body.title.trim(), kind: body.kind, checks: checkSettings(body.checks) })
-      .returning()
-      .get();
-    saveQuestions(task.id, body.kind === "quiz" ? (body.questions ?? []) : []);
-    return c.json(task);
-  })
-
-  .get("/tasks/:id", (c) => {
-    const task = ownedTask(c, c.req.param("id"));
-    if (!task) return c.json({ error: "Not found" }, 404);
-    return c.json({ ...task, checks: checkSettings(task.checks), questions: getQuestions(task.id) });
-  })
-
-  .put("/tasks/:id", async (c) => {
-    const task = ownedTask(c, c.req.param("id"));
-    if (!task) return c.json({ error: "Not found" }, 404);
-    const body = await c.req.json<TaskInput>();
-    const error = validateTask(body);
-    if (error) return c.json({ error }, 400);
-    db.update(schema.tasks).set({ title: body.title.trim(), kind: body.kind, checks: checkSettings(body.checks) }).where(eq(schema.tasks.id, task.id)).run();
-    saveQuestions(task.id, body.kind === "quiz" ? (body.questions ?? []) : []);
-    return c.json({ ok: true });
-  })
-
-  .delete("/tasks/:id", (c) => {
-    const task = ownedTask(c, c.req.param("id"));
-    if (!task) return c.json({ error: "Not found" }, 404);
-    db.delete(schema.tasks).where(eq(schema.tasks.id, task.id)).run();
-    return c.json({ ok: true });
-  })
-
   .post("/tasks/:id/runs", (c) => {
-    const task = ownedTask(c, c.req.param("id"));
-    if (!task) return c.json({ error: "Not found" }, 404);
-    if (task.kind === "quiz" && getQuestions(task.id).length === 0) return c.json({ error: "Add at least one question first" }, 400);
-    const run = db.insert(schema.runs).values({ id: randomId(), taskId: task.id }).returning().get();
-    return c.json(run);
+    const row = taskFor(c, c.req.param("id"));
+    if (!row) return c.json({ error: "Not found" }, 404);
+    const questions = questionsOf(row.task.id);
+    if (row.task.kind === "quiz" && questions.length === 0) return c.json({ error: "Add at least one question first" }, 400);
+    // The run keeps its own copy of the questions, so later edits don't change what was asked.
+    const run = db.insert(schema.runs).values({ id: randomId(), taskId: row.task.id, questions }).returning().get();
+    return c.json({ id: run.id });
   })
 
   /** The presenter polls this to rotate the QR code. */
@@ -180,7 +87,7 @@ export const teacherRoutes = new Hono<AppEnv>()
     const body = await c.req.json<{ email?: string; answers?: (number | null)[] }>();
     const email = body.email?.trim().toLowerCase() ?? "";
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !emailAllowed(email)) return c.json({ error: "Enter the student's university email address" }, 400);
-    const questions = getQuestions(row.task.id);
+    const questions = row.run.questions;
     const answers = body.answers ?? [];
     if (answers.some((a, i) => a !== null && !(questions[i]?.type === "choice" && Number.isInteger(a) && a >= 0 && a < questions[i]!.options.length)))
       return c.json({ error: "Invalid answer" }, 400);
@@ -247,7 +154,7 @@ export const teacherRoutes = new Hono<AppEnv>()
   });
 
 function results(run: typeof schema.runs.$inferSelect, task: typeof schema.tasks.$inferSelect) {
-  const questions = getQuestions(task.id);
+  const questions = run.questions;
   const checkins = db
     .select({ checkin: schema.checkins, email: schema.users.email })
     .from(schema.checkins)
@@ -403,36 +310,70 @@ export const joinRoutes = new Hono<AppEnv>()
 // Students: their own participation history
 // ---------------------------------------------------------------------------
 
-export const studentRoutes = new Hono<AppEnv>().use(requireUser).get("/history", (c) => {
-  const userId = c.get("user")!.id;
-  const rows = db
-    .select({ run: schema.runs, task: schema.tasks, checkin: schema.checkins })
-    .from(schema.checkins)
-    .innerJoin(schema.runs, eq(schema.runs.id, schema.checkins.runId))
-    .innerJoin(schema.tasks, eq(schema.tasks.id, schema.runs.taskId))
-    .where(eq(schema.checkins.userId, userId))
-    .orderBy(desc(schema.runs.startedAt))
-    .all();
-  const runIds = rows.map((r) => r.run.id);
-  const taskIds = [...new Set(rows.map((r) => r.task.id))];
-  const answers = runIds.length
-    ? db.select().from(schema.answers).where(and(inArray(schema.answers.runId, runIds), eq(schema.answers.userId, userId))).all()
-    : [];
-  const questions = taskIds.length ? db.select().from(schema.questions).where(inArray(schema.questions.taskId, taskIds)).all() : [];
-  return c.json(
-    rows.map(({ run, task, checkin }) => {
-      const mine = answers.filter((a) => a.runId === run.id);
-      return {
-        runId: run.id,
-        title: task.title,
-        kind: task.kind,
-        startedAt: run.startedAt,
-        checkedInAt: checkin.scannedAt,
-        questions: questions.filter((q) => q.taskId === task.id).length,
-        answered: mine.length,
-        notCounted: mine.filter((a) => a.disqualified).length,
-        typed: mine.filter((a) => a.text).length,
-      };
-    }),
-  );
-});
+export const studentRoutes = new Hono<AppEnv>()
+  .use(requireUser)
+  .get("/history", (c) => {
+    const userId = c.get("user")!.id;
+    const rows = db
+      .select({ run: schema.runs, task: schema.tasks, course: schema.courses, checkin: schema.checkins })
+      .from(schema.checkins)
+      .innerJoin(schema.runs, eq(schema.runs.id, schema.checkins.runId))
+      .innerJoin(schema.tasks, eq(schema.tasks.id, schema.runs.taskId))
+      .innerJoin(schema.courses, eq(schema.courses.id, schema.tasks.courseId))
+      .where(eq(schema.checkins.userId, userId))
+      .orderBy(desc(schema.runs.startedAt))
+      .all();
+    const runIds = rows.map((r) => r.run.id);
+    const answers = runIds.length
+      ? db.select().from(schema.answers).where(and(inArray(schema.answers.runId, runIds), eq(schema.answers.userId, userId))).all()
+      : [];
+    return c.json(
+      rows.map(({ run, task, course, checkin }) => {
+        const mine = answers.filter((a) => a.runId === run.id);
+        return {
+          runId: run.id,
+          title: task.title,
+          course: course.title,
+          kind: task.kind,
+          startedAt: run.startedAt,
+          checkedInAt: checkin.scannedAt,
+          questions: run.questions.length,
+          answered: mine.length,
+          notCounted: mine.filter((a) => a.disqualified).length,
+          typed: mine.filter((a) => a.text).length,
+          canReview: run.endedAt !== null && run.questions.length > 0 && reviewAllowed(task, course),
+        };
+      }),
+    );
+  })
+
+  /** A finished session's questions with this student's own answers, if the teacher allows review. Also used for practice. */
+  .get("/runs/:id/review", (c) => {
+    const userId = c.get("user")!.id;
+    const row = db
+      .select({ run: schema.runs, task: schema.tasks, course: schema.courses })
+      .from(schema.checkins)
+      .innerJoin(schema.runs, eq(schema.runs.id, schema.checkins.runId))
+      .innerJoin(schema.tasks, eq(schema.tasks.id, schema.runs.taskId))
+      .innerJoin(schema.courses, eq(schema.courses.id, schema.tasks.courseId))
+      .where(and(eq(schema.checkins.runId, c.req.param("id")), eq(schema.checkins.userId, userId)))
+      .get();
+    if (!row || row.run.endedAt === null || !reviewAllowed(row.task, row.course)) return c.json({ error: "This session can't be reviewed." }, 403);
+    const answers = db.select().from(schema.answers).where(and(eq(schema.answers.runId, row.run.id), eq(schema.answers.userId, userId))).all();
+    return c.json({
+      title: row.task.title,
+      course: row.course.title,
+      startedAt: row.run.startedAt,
+      questions: row.run.questions.map((q) => {
+        const a = answers.find((x) => x.questionId === q.id);
+        return {
+          id: q.id,
+          type: q.type,
+          prompt: q.prompt,
+          options: q.options,
+          correctIndex: q.correctIndex,
+          mine: a ? { choice: a.choice, text: a.text, confidence: a.confidence, counted: !a.disqualified } : null,
+        };
+      }),
+    });
+  });

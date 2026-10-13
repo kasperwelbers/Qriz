@@ -5,6 +5,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { type AppEnv, authRoutes, loadUser, userForSessionToken } from "./auth.ts";
 import { config } from "./config.ts";
 import { type Conn, getLiveRun, isCheckedIn } from "./live.ts";
+import { courseRoutes } from "./courses.ts";
 import { joinRoutes, studentRoutes, teacherRoutes } from "./routes.ts";
 
 const app = new Hono<AppEnv>();
@@ -13,6 +14,7 @@ app.use(secureHeaders());
 app.use("/api/*", loadUser);
 app.route("/api/auth", authRoutes);
 app.route("/api", joinRoutes);
+app.route("/api/teacher", courseRoutes);
 app.route("/api/teacher", teacherRoutes);
 app.route("/api/me", studentRoutes);
 

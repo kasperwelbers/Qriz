@@ -6,7 +6,7 @@ import { config } from "./config.ts";
 import { randomId, sha256 } from "./crypto.ts";
 import { db, schema } from "./db/index.ts";
 
-type Question = typeof schema.questions.$inferSelect;
+type Question = schema.RunQuestion;
 type Phase = "lobby" | "question" | "paper" | "closed" | "ended";
 type Role = "presenter" | "student";
 
@@ -43,9 +43,11 @@ class LiveRun {
     readonly task: typeof schema.tasks.$inferSelect,
     readonly questions: Question[],
     ended: boolean,
+    courseChecks: Partial<Record<string, string>> = {},
   ) {
     if (ended) this.phase = "ended";
-    this.checks = checkSettings(task.checks);
+    // The task's own settings override the course defaults.
+    this.checks = checkSettings({ ...courseChecks, ...task.checks });
   }
 
   get current(): Question | undefined {
@@ -343,8 +345,8 @@ export function getLiveRun(runId: string): LiveRun | null {
   const run = db.select().from(schema.runs).where(eq(schema.runs.id, runId)).get();
   if (!run) return null;
   const task = db.select().from(schema.tasks).where(eq(schema.tasks.id, run.taskId)).get()!;
-  const questions = db.select().from(schema.questions).where(eq(schema.questions.taskId, task.id)).orderBy(asc(schema.questions.position)).all();
-  const lr = new LiveRun(runId, task, questions, run.endedAt !== null);
+  const course = db.select().from(schema.courses).where(eq(schema.courses.id, task.courseId)).get()!;
+  const lr = new LiveRun(runId, task, run.questions, run.endedAt !== null, course.defaults.checks);
   live.set(runId, lr);
   return lr;
 }

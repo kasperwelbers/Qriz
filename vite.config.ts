@@ -8,7 +8,7 @@ const api = "http://localhost:3000";
 export default defineConfig({
   root: "web",
   plugins: [react(), tailwindcss()],
-  resolve: { alias: { "@": path.resolve(__dirname, "web/src") } },
+  resolve: { alias: { "@": path.resolve(__dirname, "web/src"), "@shared": path.resolve(__dirname, "shared") } },
   build: { outDir: "../dist", emptyOutDir: true },
   server: {
     host: true,

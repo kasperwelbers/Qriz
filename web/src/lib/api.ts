@@ -1,3 +1,5 @@
+import type { QuestionData } from "@shared/spec";
+export type { TaskData } from "@shared/spec";
 import { useEffect, useState } from "react";
 
 export type Me = { id: string; email: string; role: "teacher" | "student"; name: string | null } | null;
@@ -33,20 +35,13 @@ export function useMe() {
 
 export const letter = (i: number) => String.fromCharCode(65 + i);
 
-export type Question = {
-  id?: string;
-  type: "choice" | "open";
-  prompt: string;
-  options: string[];
-  /** Null: a poll, no right answer. */
-  correctIndex: number | null;
-  scoring: "correct" | "attempt";
-  askConfidence: boolean;
-  timeLimitSec: number;
-};
+export type Question = QuestionData;
 
 export type CheckAction = "disqualify" | "warn" | "record";
 export type Checks = { leftPage: CheckAction; splitScreen: CheckAction; connectionLost: CheckAction };
 export const defaultChecks: Checks = { leftPage: "disqualify", splitScreen: "disqualify", connectionLost: "record" };
 export type Run = { id: string; taskId: string; startedAt: number; endedAt: number | null };
-export type Task = { id: string; title: string; kind: "attendance" | "quiz"; createdAt: number; runs: Run[] };
+export type CourseDefaults = { review?: "never" | "after-session"; checks?: Partial<Checks> };
+export type CourseSummary = { id: string; title: string; taskCount: number; shared: boolean; createdAt: number };
+export type CourseTask = { id: string; title: string; kind: "attendance" | "quiz"; review: "never" | "after-session" | null; questionCount: number; runs: Run[] };
+export type CourseDetail = { id: string; title: string; teachers: string[]; defaults: CourseDefaults; isOwner: boolean; tasks: CourseTask[] };
